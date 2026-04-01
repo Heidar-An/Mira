@@ -1,5 +1,6 @@
-use crate::{storage, utils::unix_timestamp};
+use crate::{extractors, storage, utils::unix_timestamp};
 use anyhow::{anyhow, Context, Result};
+use rayon::prelude::*;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -7,6 +8,13 @@ use std::{
 use walkdir::WalkDir;
 
 const PROGRESS_UPDATE_EVERY: u64 = 25;
+const EXTRACTION_BATCH_SIZE: usize = 8;
+
+struct PreparedFile {
+    path: PathBuf,
+    indexed_at: i64,
+    content: extractors::ExtractionOutput,
+}
 
 pub fn normalize_root_path(path: &str) -> Result<String> {
     let input = PathBuf::from(path);
@@ -32,45 +40,55 @@ pub fn run_index_job(db_path: &Path, root_id: i64, job_id: i64, root_path: &str)
         return Err(anyhow!("folder does not exist anymore"));
     }
 
-    let total = count_files(&root);
+    let files = collect_files(&root)?;
+    let total = files.len() as u64;
     storage::update_job_progress(db_path, root_id, job_id, 0, total, None)?;
 
-    let conn = storage::open_connection(db_path)?;
-    storage::delete_files_for_root(&conn, root_id)?;
+    let mut conn = storage::open_connection(db_path)?;
+    {
+        let tx = conn.transaction()?;
+        storage::clear_content_for_root(&tx, root_id)?;
+        storage::delete_files_for_root(&tx, root_id)?;
+        tx.commit()?;
+    }
 
     let mut processed = 0_u64;
     let mut last_error: Option<String> = None;
 
-    for entry in WalkDir::new(&root)
-        .into_iter()
-        .filter_entry(|entry| !is_ignored(entry.path()))
-    {
-        match entry {
-            Ok(entry) if entry.file_type().is_file() => {
-                let path = entry.path();
-                match storage::index_file(&conn, root_id, path, unix_timestamp()) {
-                    Ok(()) => {}
-                    Err(error) => {
+    for batch in files.chunks(EXTRACTION_BATCH_SIZE) {
+        let prepared_batch = batch
+            .par_iter()
+            .map(|path| prepare_file(path))
+            .collect::<Vec<_>>();
+
+        let tx = conn.transaction()?;
+        for prepared in &prepared_batch {
+            match storage::index_file(&tx, root_id, &prepared.path, prepared.indexed_at) {
+                Ok(stored_file) => {
+                    if let Err(error) = storage::replace_file_content(
+                        &tx,
+                        stored_file.file_id,
+                        &prepared.content,
+                        prepared.indexed_at,
+                    ) {
                         last_error = Some(error.to_string());
                     }
                 }
-
-                processed += 1;
-                if processed % PROGRESS_UPDATE_EVERY == 0 || processed == total {
-                    storage::update_job_progress(
-                        db_path,
-                        root_id,
-                        job_id,
-                        processed,
-                        total,
-                        Some(path.to_string_lossy().into_owned()),
-                    )?;
+                Err(error) => {
+                    last_error = Some(error.to_string());
                 }
             }
-            Ok(_) => {}
-            Err(error) => {
-                last_error = Some(error.to_string());
-            }
+        }
+        tx.commit()?;
+
+        processed += prepared_batch.len() as u64;
+        let should_update_progress =
+            processed % PROGRESS_UPDATE_EVERY <= prepared_batch.len() as u64 || processed == total;
+        if should_update_progress {
+            let current_path = prepared_batch
+                .last()
+                .map(|prepared| prepared.path.to_string_lossy().into_owned());
+            storage::update_job_progress(db_path, root_id, job_id, processed, total, current_path)?;
         }
     }
 
@@ -92,13 +110,37 @@ pub fn classify_kind(extension: &str) -> &'static str {
     }
 }
 
-fn count_files(root: &Path) -> u64 {
-    WalkDir::new(root)
+fn prepare_file(path: &Path) -> PreparedFile {
+    let indexed_at = unix_timestamp();
+    let extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| "unknown".to_string());
+    let kind = classify_kind(&extension);
+    let content = extractors::extract_file_text(path, kind, &extension);
+
+    PreparedFile {
+        path: path.to_path_buf(),
+        indexed_at,
+        content,
+    }
+}
+
+fn collect_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+
+    for entry in WalkDir::new(root)
         .into_iter()
         .filter_entry(|entry| !is_ignored(entry.path()))
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .count() as u64
+    {
+        match entry {
+            Ok(entry) if entry.file_type().is_file() => files.push(entry.into_path()),
+            Ok(_) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Ok(files)
 }
 
 fn is_ignored(path: &Path) -> bool {

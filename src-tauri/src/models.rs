@@ -25,6 +25,8 @@ pub struct SearchResult {
     pub indexed_at: i64,
     pub score: i64,
     pub match_reasons: Vec<String>,
+    pub snippet: Option<String>,
+    pub snippet_source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,6 +43,10 @@ pub struct FileDetails {
     pub modified_at: Option<i64>,
     pub indexed_at: i64,
     pub preview_path: Option<String>,
+    pub content_status: Option<String>,
+    pub content_snippet: Option<String>,
+    pub content_source: Option<String>,
+    pub extraction_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,4 +83,32 @@ pub struct FileCandidate {
     pub size: i64,
     pub modified_at: Option<i64>,
     pub indexed_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredFile {
+    pub file_id: i64,
+}
+
+#[derive(Debug)]
+pub struct ContentMatch {
+    pub file_id: i64,
+    pub root_id: i64,
+    pub name: String,
+    pub path: String,
+    pub extension: String,
+    pub kind: String,
+    pub size: i64,
+    pub modified_at: Option<i64>,
+    pub indexed_at: i64,
+    pub source_label: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug)]
+pub struct FileContentPreview {
+    pub content_status: Option<String>,
+    pub content_snippet: Option<String>,
+    pub content_source: Option<String>,
+    pub extraction_error: Option<String>,
 }

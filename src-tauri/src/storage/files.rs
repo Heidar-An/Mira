@@ -1,5 +1,5 @@
 use crate::{
-    models::{FileCandidate, FileDetails},
+    models::{FileCandidate, FileDetails, StoredFile},
     preview::preview_path_for_kind,
 };
 use anyhow::{anyhow, Context, Result};
@@ -74,6 +74,7 @@ pub fn fetch_candidates(
 }
 
 pub fn fetch_file_details(conn: &Connection, file_id: i64) -> Result<FileDetails> {
+    let content_preview = super::fetch_content_preview(conn, file_id)?;
     let details = conn.query_row(
         "SELECT f.id,
                 f.root_id,
@@ -104,6 +105,10 @@ pub fn fetch_file_details(conn: &Connection, file_id: i64) -> Result<FileDetails
                 modified_at: row.get(8)?,
                 indexed_at: row.get(9)?,
                 preview_path: preview_path_for_kind(&path, &kind),
+                content_status: content_preview.content_status.clone(),
+                content_snippet: content_preview.content_snippet.clone(),
+                content_source: content_preview.content_source.clone(),
+                extraction_error: content_preview.extraction_error.clone(),
             })
         },
     )?;
@@ -116,7 +121,12 @@ pub fn delete_files_for_root(conn: &Connection, root_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub fn index_file(conn: &Connection, root_id: i64, path: &Path, indexed_at: i64) -> Result<()> {
+pub fn index_file(
+    conn: &Connection,
+    root_id: i64,
+    path: &Path,
+    indexed_at: i64,
+) -> Result<StoredFile> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("failed to read metadata for {}", path.display()))?;
     let modified_at = metadata
@@ -164,7 +174,13 @@ pub fn index_file(conn: &Connection, root_id: i64, path: &Path, indexed_at: i64)
         ],
     )?;
 
-    Ok(())
+    let file_id = conn.query_row(
+        "SELECT id FROM files WHERE path = ?1",
+        params![path.to_string_lossy().into_owned()],
+        |row| row.get(0),
+    )?;
+
+    Ok(StoredFile { file_id })
 }
 
 pub fn map_file_candidate(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileCandidate> {

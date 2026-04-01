@@ -1,8 +1,12 @@
+mod content;
 mod files;
 mod jobs;
 mod roots;
 mod schema;
 
+pub use content::{
+    clear_content_for_root, fetch_content_preview, replace_file_content, search_content_matches,
+};
 pub use files::{delete_files_for_root, fetch_candidates, fetch_file_details, index_file};
 pub use jobs::{
     create_index_job, fetch_job_by_id, fetch_latest_job, fetch_latest_jobs, mark_job_failed,

@@ -42,11 +42,30 @@ pub fn initialize_database(path: &Path) -> Result<()> {
             finished_at INTEGER
         );
 
+        CREATE TABLE IF NOT EXISTS file_extracts (
+            file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+            status TEXT NOT NULL,
+            extractor TEXT,
+            text_length INTEGER NOT NULL DEFAULT 0,
+            chunk_count INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL,
+            error_message TEXT
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS file_text_chunks USING fts5(
+            file_id UNINDEXED,
+            chunk_index UNINDEXED,
+            source_label UNINDEXED,
+            text,
+            tokenize = 'porter unicode61'
+        );
+
         CREATE INDEX IF NOT EXISTS idx_files_root_id ON files(root_id);
         CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
         CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension);
         CREATE INDEX IF NOT EXISTS idx_files_modified_at ON files(modified_at DESC);
         CREATE INDEX IF NOT EXISTS idx_index_jobs_root_id ON index_jobs(root_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_file_extracts_status ON file_extracts(status);
         ",
     )?;
     Ok(())
@@ -56,6 +75,13 @@ pub fn open_connection(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)
         .with_context(|| format!("failed to open database at {}", path.display()))?;
     conn.busy_timeout(Duration::from_secs(5))?;
-    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+    conn.execute_batch(
+        "
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+        ",
+    )?;
     Ok(conn)
 }

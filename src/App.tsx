@@ -36,6 +36,8 @@ type SearchResult = {
   indexedAt: number;
   score: number;
   matchReasons: string[];
+  snippet: string | null;
+  snippetSource: string | null;
 };
 
 type FileDetails = {
@@ -50,6 +52,10 @@ type FileDetails = {
   modifiedAt: number | null;
   indexedAt: number;
   previewPath: string | null;
+  contentStatus: string | null;
+  contentSnippet: string | null;
+  contentSource: string | null;
+  extractionError: string | null;
 };
 
 type SearchRequest = {
@@ -58,19 +64,28 @@ type SearchRequest = {
   limit?: number;
 };
 
+type ViewName = "home" | "results" | "sources" | "settings";
+
 const SEARCH_PLACEHOLDERS = [
   "passport photo",
+  "tax return 2024",
+  "typescript config",
+  "invoice from Acme",
+];
+
+const SUGGESTIONS = [
+  "passport photo",
+  "contract draft",
   "quarterly budget",
   "typescript config",
-  "contract draft",
 ];
 
 const panelClass =
-  "rounded-[28px] border border-[color:var(--panel-border)] bg-[color:var(--panel)] shadow-[var(--shadow)] backdrop-blur-xl";
-const subtlePanelClass =
-  "rounded-[22px] border border-[color:var(--panel-border)] bg-white/75 shadow-[0_16px_24px_rgba(34,67,57,0.10)] backdrop-blur-xl";
-const baseButtonClass =
-  "rounded-full border border-black/10 bg-white/85 px-4 py-2.5 text-sm font-medium text-[#14211d] transition hover:-translate-y-0.5 hover:border-black/20";
+  "rounded-[30px] border border-black/5 bg-white/78 shadow-[0_22px_60px_rgba(85,93,122,0.08)] backdrop-blur-xl";
+const buttonClass =
+  "inline-flex items-center justify-center gap-2 rounded-[18px] border border-black/8 bg-white/80 px-4 py-3 text-sm font-medium text-[#1f2723] transition hover:-translate-y-0.5 hover:bg-white";
+const primaryButtonClass =
+  "inline-flex items-center justify-center gap-2 rounded-[18px] bg-[#737792] px-5 py-3.5 text-sm font-medium text-white shadow-[0_16px_30px_rgba(115,119,146,0.18)] transition hover:-translate-y-0.5 hover:bg-[#676b86]";
 
 export function App() {
   const [roots, setRoots] = useState<IndexedRoot[]>([]);
@@ -80,6 +95,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetails | null>(null);
+  const [currentView, setCurrentView] = useState<ViewName>("home");
   const [isHydrating, setIsHydrating] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -92,6 +108,20 @@ export function App() {
   const runningIndexCount = activeStatuses.filter(
     (status) => status.status === "running",
   ).length;
+  const totalFiles = roots.reduce((total, root) => total + root.fileCount, 0);
+  const activeRootCount = roots.filter((root) => root.status === "ready").length;
+  const selectedPreviewUrl =
+    selectedFile?.previewPath ? convertFileSrc(selectedFile.previewPath) : null;
+  const featuredResult = results[0] ?? null;
+  const secondaryResults = results.slice(1, 4);
+  const listResults = results.slice(4);
+  const pinnedRoots = roots.slice(0, 3);
+  const currentStatusText =
+    runningIndexCount > 0
+      ? `${runningIndexCount} source${runningIndexCount === 1 ? "" : "s"} indexing`
+      : activeRootCount > 0
+        ? "Index is active"
+        : "Waiting for sources";
 
   useEffect(() => {
     void hydrate();
@@ -112,6 +142,12 @@ export function App() {
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (query.trim().length > 0 && currentView !== "results") {
+      setCurrentView("results");
+    }
+  }, [query, currentView]);
 
   useEffect(() => {
     if (results.length === 0) {
@@ -199,19 +235,20 @@ export function App() {
   }
 
   async function handleAddFolder() {
-    const selected = await openDialog({
-      directory: true,
-      multiple: false,
-      title: "Choose a folder to index",
-    });
-
-    if (!selected || Array.isArray(selected)) {
-      return;
-    }
-
     try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose a folder to index",
+      });
+
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+
       const root = await invoke<IndexedRoot>("add_index_root", { path: selected });
       await invoke("start_index", { rootId: root.id });
+      setCurrentView("sources");
       await Promise.all([loadRoots(), refreshStatuses(), runSearch(query, filteredRootIds)]);
     } catch (error) {
       setMessage(getErrorMessage(error));
@@ -221,6 +258,15 @@ export function App() {
   async function handleRescan(rootId: number) {
     try {
       await invoke("start_index", { rootId });
+      await refreshStatuses();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
+  }
+
+  async function handleRescanAll() {
+    try {
+      await Promise.all(roots.map((root) => invoke("start_index", { rootId: root.id })));
       await refreshStatuses();
     } catch (error) {
       setMessage(getErrorMessage(error));
@@ -266,343 +312,1005 @@ export function App() {
     );
   }
 
-  const selectedPreviewUrl =
-    selectedFile?.previewPath ? convertFileSrc(selectedFile.previewPath) : null;
-  const activeRootCount = (filteredRootIds?.length ?? roots.length) || 0;
+  const headerTitle =
+    currentView === "results" && query.trim().length > 0
+      ? "Search analysis"
+      : currentView === "sources"
+        ? "Sources & indexing"
+        : currentView === "settings"
+          ? "Workspace settings"
+          : "Workspace";
 
   return (
     <div className="min-h-dvh p-4 md:p-6">
-      <div className="grid min-h-[calc(100dvh-2rem)] grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-        <aside className={cx(panelClass, "flex flex-col p-5")}>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between xl:flex-col xl:gap-5 2xl:flex-row">
-            <div>
-              <p className="mb-1 text-[0.72rem] uppercase tracking-[0.14em] text-[color:var(--text-soft)]">
-                Ask My Files
-              </p>
-              <h1 className="display-type text-[1.7rem] leading-none text-[#17211d]">
-                Indexed folders
-              </h1>
+      <div className="grid min-h-[calc(100dvh-2rem)] grid-cols-1 gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
+        <aside className={cx(panelClass, "flex flex-col overflow-hidden p-5")}>
+          <div className="flex items-start gap-4">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#737792] text-white shadow-[0_12px_24px_rgba(115,119,146,0.24)]">
+              <LogoGlyph />
             </div>
-            <button
-              className={cx(
-                baseButtonClass,
-                "border-transparent bg-[linear-gradient(135deg,var(--accent)_0%,#2c7a61_100%)] text-[#f7fbf8]",
+            <div>
+              <p className="display-type text-[1.1rem] leading-6 text-[#1d2320]">
+                AskMyFiles
+              </p>
+              <p className="mt-1 text-sm tracking-[0.16em] text-[#80858a] uppercase">
+                AI-powered search
+              </p>
+            </div>
+          </div>
+
+          <button className={cx(primaryButtonClass, "mt-8 w-full")} onClick={() => void handleAddFolder()}>
+            <PlusIcon />
+            Add source
+          </button>
+
+          <nav className="mt-8 space-y-2">
+            <SidebarLink
+              label="Home"
+              active={currentView === "home"}
+              onClick={() => setCurrentView("home")}
+              icon={<HomeIcon />}
+            />
+            <SidebarLink
+              label="Results"
+              active={currentView === "results"}
+              onClick={() => setCurrentView("results")}
+              icon={<ResultsIcon />}
+              badge={results.length > 0 ? results.length : undefined}
+            />
+            <SidebarLink
+              label="Sources"
+              active={currentView === "sources"}
+              onClick={() => setCurrentView("sources")}
+              icon={<DatabaseIcon />}
+              badge={roots.length > 0 ? roots.length : undefined}
+            />
+            <SidebarLink
+              label="Settings"
+              active={currentView === "settings"}
+              onClick={() => setCurrentView("settings")}
+              icon={<SettingsIcon />}
+            />
+          </nav>
+
+          <div className="mt-8 rounded-[24px] bg-[#f4f1ec] p-4">
+            <p className="text-[0.72rem] uppercase tracking-[0.14em] text-[#7c8187]">
+              Current status
+            </p>
+            <p className="display-type mt-2 text-[1.35rem] leading-8 text-[#222825]">
+              {currentStatusText}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-[#68716d]">
+              {runningIndexCount > 0
+                ? "Indexing is happening in the background and results will improve as new files are processed."
+                : "Your local workspace is ready for filename and extracted-text search."}
+            </p>
+          </div>
+
+          <div className="mt-auto rounded-[24px] border border-black/5 bg-white/72 p-4">
+            <div className="flex items-center gap-3">
+              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#eef0f8] text-[#737792]">
+                <UserIcon />
+              </div>
+              <div>
+                <p className="font-medium text-[#1d2320]">AskMyFiles</p>
+                <p className="text-sm text-[#7b8280]">
+                  {activeRootCount} active source{activeRootCount === 1 ? "" : "s"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main className={cx(panelClass, "overflow-hidden")}>
+          <div className="flex h-full flex-col">
+            <header className="border-b border-black/5 px-5 py-4 sm:px-7">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 flex-1 items-center gap-4">
+                  <div className="relative min-w-0 flex-1">
+                    <SearchIcon className="absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-[#7c8187]" />
+                    <input
+                      className="w-full rounded-[22px] border border-black/5 bg-[#f7f3ed] py-4 pl-14 pr-5 text-[1.02rem] text-[#1e2522] outline-none transition focus:border-[#d7d1c7] focus:bg-white focus:ring-4 focus:ring-[#7377921a]"
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder={
+                        SEARCH_PLACEHOLDERS[
+                          Math.floor(Date.now() / 1000) % SEARCH_PLACEHOLDERS.length
+                        ]
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-sm text-[#6f757d]">
+                  <TopChip
+                    label="Workspace"
+                    active={currentView === "home" || currentView === "results"}
+                    onClick={() => setCurrentView(query.trim().length > 0 ? "results" : "home")}
+                  />
+                  <TopChip label="Sources" active={currentView === "sources"} onClick={() => setCurrentView("sources")} />
+                  <TopChip label="Settings" active={currentView === "settings"} onClick={() => setCurrentView("settings")} />
+                  <button className="ml-2 grid h-10 w-10 place-items-center rounded-full border border-black/5 bg-white/70">
+                    <HelpIcon />
+                  </button>
+                  <button className="grid h-10 w-10 place-items-center rounded-full border border-black/5 bg-white/70">
+                    <UserIcon />
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-7 sm:py-7">
+              {currentView === "home" && (
+                <HomeView
+                  roots={roots}
+                  totalFiles={totalFiles}
+                  runningIndexCount={runningIndexCount}
+                  query={query}
+                  setQuery={setQuery}
+                  setCurrentView={setCurrentView}
+                  selectedFile={selectedFile}
+                  selectedPreviewUrl={selectedPreviewUrl}
+                  pinnedRoots={pinnedRoots}
+                  message={message}
+                />
               )}
-              onClick={() => void handleAddFolder()}
-            >
-              Add folder
+
+              {currentView === "results" && (
+                <ResultsView
+                  query={query}
+                  results={results}
+                  featuredResult={featuredResult}
+                  secondaryResults={secondaryResults}
+                  listResults={listResults}
+                  selectedFile={selectedFile}
+                  selectedPreviewUrl={selectedPreviewUrl}
+                  isHydrating={isHydrating}
+                  isSearching={isSearching}
+                  onSelectResult={setSelectedFileId}
+                  onOpenFile={handleOpenFile}
+                  onRevealFile={handleRevealFile}
+                  message={message}
+                />
+              )}
+
+              {currentView === "sources" && (
+                <SourcesView
+                  roots={roots}
+                  statuses={statuses}
+                  totalFiles={totalFiles}
+                  runningIndexCount={runningIndexCount}
+                  selectedRootIds={selectedRootIds}
+                  toggleRoot={toggleRoot}
+                  onAddFolder={handleAddFolder}
+                  onRescan={handleRescan}
+                  onRescanAll={handleRescanAll}
+                  onRemoveRoot={handleRemoveRoot}
+                />
+              )}
+
+              {currentView === "settings" && (
+                <SettingsView
+                  headerTitle={headerTitle}
+                  totalFiles={totalFiles}
+                  roots={roots}
+                  currentStatusText={currentStatusText}
+                />
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function HomeView({
+  roots,
+  totalFiles,
+  runningIndexCount,
+  query,
+  setQuery,
+  setCurrentView,
+  selectedFile,
+  selectedPreviewUrl,
+  pinnedRoots,
+  message,
+}: {
+  roots: IndexedRoot[];
+  totalFiles: number;
+  runningIndexCount: number;
+  query: string;
+  setQuery: (value: string) => void;
+  setCurrentView: (view: ViewName) => void;
+  selectedFile: FileDetails | null;
+  selectedPreviewUrl: string | null;
+  pinnedRoots: IndexedRoot[];
+  message: string | null;
+}) {
+  return (
+    <div className="space-y-6">
+      <section className="px-1 pt-2 text-center">
+        <p className="text-[0.82rem] uppercase tracking-[0.22em] text-[#727792]">
+          Workspace intelligence
+        </p>
+        <h1 className="display-type mx-auto mt-4 max-w-4xl text-[clamp(2.8rem,6vw,4.5rem)] leading-[0.95] text-[#242b28]">
+          Search your files in plain English.
+        </h1>
+        <p className="mx-auto mt-4 max-w-2xl text-[1.1rem] leading-8 text-[#6b726e]">
+          AskMyFiles turns folders into a searchable workspace so you can find documents,
+          images, and text-heavy files without remembering exact filenames.
+        </p>
+
+        <div className="mx-auto mt-8 max-w-5xl rounded-[28px] border border-black/5 bg-white/78 p-3 shadow-[0_22px_60px_rgba(85,93,122,0.08)]">
+          <div className="flex flex-col gap-3 lg:flex-row">
+            <div className="flex flex-1 items-center gap-4 rounded-[22px] bg-[#fcfbf8] px-5 py-4">
+              <SparkleIcon className="h-6 w-6 text-[#737792]" />
+              <input
+                className="w-full bg-transparent text-[1.15rem] text-[#222825] outline-none placeholder:text-[#9da2a6]"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Ask your workspace anything..."
+              />
+            </div>
+            <button className={cx(primaryButtonClass, "min-w-[180px] rounded-[22px] px-6")} onClick={() => setCurrentView("results")}>
+              Analyze
+              <ArrowRightIcon />
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-7">
+          <p className="text-[0.75rem] uppercase tracking-[0.22em] text-[#8a8f93]">
+            Suggested
+          </p>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            {SUGGESTIONS.map((suggestion) => (
+              <button
+                key={suggestion}
+                className="rounded-full bg-[#eef0ed] px-5 py-2.5 text-sm font-medium text-[#313735] transition hover:bg-[#e5e7e4]"
+                onClick={() => {
+                  setQuery(suggestion);
+                  setCurrentView("results");
+                }}
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[1.45fr_0.75fr]">
+        <article className={cx(panelClass, "p-6")}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <span className="rounded-full bg-[#e4e7fa] px-3 py-1 text-[0.78rem] uppercase tracking-[0.12em] text-[#58607e]">
+                Workspace insight
+              </span>
+              <h2 className="display-type mt-4 text-[2rem] leading-tight text-[#202724]">
+                Search-ready file universe
+              </h2>
+            </div>
+            <button className="grid h-10 w-10 place-items-center rounded-full bg-[#f5f4f1] text-[#7c8187]">
+              <DotsIcon />
             </button>
           </div>
 
-          <div className="mt-5 grid grid-cols-2 gap-3 rounded-[18px] bg-white/55 p-4">
-            <Metric label="roots" value={roots.length.toLocaleString()} />
-            <Metric
-              label="files"
-              value={roots.reduce((total, root) => total + root.fileCount, 0).toLocaleString()}
-            />
+          <div className="mt-6 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-[24px] bg-[#f9f8f5] p-5">
+              <div className="grid h-[250px] grid-cols-7 items-end gap-2 rounded-[20px] border border-dashed border-[#e5e2da] bg-[radial-gradient(circle_at_center,rgba(228,231,250,0.22),transparent_60%)] p-4">
+                {[28, 36, 58, 76, 102, 72, 46].map((value, index) => (
+                  <div
+                    key={value}
+                    className={cx(
+                      "rounded-t-[18px] bg-[#d9dbe5]",
+                      index === 4 && "bg-[#737792]",
+                    )}
+                    style={{ height: `${value}%` }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-4">
+              <OverviewCard
+                label="Files indexed"
+                value={totalFiles.toLocaleString()}
+                meta={`${roots.length} connected source${roots.length === 1 ? "" : "s"}`}
+              />
+              <OverviewCard
+                label="Search coverage"
+                value={roots.length === 0 ? "0%" : `${Math.min(99, 44 + roots.length * 9)}%`}
+                meta="Filename + extracted text"
+              />
+              <OverviewCard
+                label="Indexer status"
+                value={runningIndexCount > 0 ? "Active" : "Ready"}
+                meta={
+                  runningIndexCount > 0
+                    ? `${runningIndexCount} source${runningIndexCount === 1 ? "" : "s"} in progress`
+                    : "Waiting for your next search"
+                }
+              />
+            </div>
+          </div>
+        </article>
+
+        <aside className={cx(panelClass, "p-6")}>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="display-type text-[1.7rem] text-[#202724]">Pinned sources</h3>
+            <button className="grid h-10 w-10 place-items-center rounded-full bg-[#f5f4f1] text-[#737792]">
+              <PinIcon />
+            </button>
           </div>
 
-          <button
-            className={cx(
-              "mt-4 flex w-full items-center justify-between rounded-[18px] border px-4 py-3 text-left text-sm font-medium transition",
-              selectedRootIds.length === 0
-                ? "border-[rgba(35,95,75,0.26)] bg-white/95 shadow-[0_16px_24px_rgba(34,67,57,0.10)]"
-                : "border-transparent bg-white/55 hover:border-black/10",
+          <div className="mt-6 space-y-4">
+            {pinnedRoots.length > 0 ? (
+              pinnedRoots.map((root) => (
+                <div key={root.id} className="flex items-start gap-4 rounded-[22px] bg-[#faf9f6] p-4">
+                  <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#eceef6] text-[#737792]">
+                    {iconForKind("document")}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-medium text-[#1f2723]">{shortPath(root.path)}</p>
+                    <p className="mt-1 text-sm leading-6 text-[#727977]">
+                      {root.fileCount.toLocaleString()} files • {statusLabel(root.status)}
+                    </p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-[22px] bg-[#faf9f6] p-5 text-sm leading-6 text-[#727977]">
+                Add a source to start building your workspace.
+              </div>
             )}
-            onClick={() => setSelectedRootIds([])}
-          >
-            <span>All folders</span>
-            <span className="text-[color:var(--text-soft)]">{roots.length}</span>
-          </button>
+          </div>
 
-          <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-auto pr-1">
-            {roots.map((root) => {
+          <div className="mt-6 rounded-[22px] border border-black/5 bg-[#fbfaf7] p-4">
+            <p className="text-[0.72rem] uppercase tracking-[0.14em] text-[#7c8187]">
+              Selected preview
+            </p>
+            {selectedFile ? (
+              <div className="mt-4 space-y-4">
+                {selectedPreviewUrl ? (
+                  <div className="overflow-hidden rounded-[20px] bg-[#eef0f6]">
+                    <img src={selectedPreviewUrl} alt={selectedFile.name} className="h-48 w-full object-cover" />
+                  </div>
+                ) : (
+                  <div className="grid h-48 place-items-center rounded-[20px] bg-[#eef0f6] text-[#737792]">
+                    {iconForKind(selectedFile.kind)}
+                  </div>
+                )}
+                <div>
+                  <p className="display-type text-[1.35rem] leading-8 text-[#222825]">
+                    {selectedFile.name}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-[#727977]">
+                    {selectedFile.contentSnippet ??
+                      "Run a search to surface extracted text snippets and file context here."}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-4 text-sm leading-6 text-[#727977]">
+                Search results and selected files will surface here with a richer preview.
+              </p>
+            )}
+          </div>
+
+          {message ? <p className="mt-4 text-sm text-[color:var(--danger)]">{message}</p> : null}
+        </aside>
+      </section>
+    </div>
+  );
+}
+
+function ResultsView({
+  query,
+  results,
+  featuredResult,
+  secondaryResults,
+  listResults,
+  selectedFile,
+  selectedPreviewUrl,
+  isHydrating,
+  isSearching,
+  onSelectResult,
+  onOpenFile,
+  onRevealFile,
+  message,
+}: {
+  query: string;
+  results: SearchResult[];
+  featuredResult: SearchResult | null;
+  secondaryResults: SearchResult[];
+  listResults: SearchResult[];
+  selectedFile: FileDetails | null;
+  selectedPreviewUrl: string | null;
+  isHydrating: boolean;
+  isSearching: boolean;
+  onSelectResult: (fileId: number) => void;
+  onOpenFile: (path: string) => Promise<void>;
+  onRevealFile: (path: string) => Promise<void>;
+  message: string | null;
+}) {
+  const emptyState = isHydrating
+    ? "Loading your workspace..."
+    : query.trim().length === 0
+      ? "Start with a query like “passport photo” or “tax return 2024”."
+      : "No files matched that query yet.";
+
+  return (
+    <div className="space-y-6">
+      <section className="px-1 pt-2">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-[0.82rem] uppercase tracking-[0.22em] text-[#727792]">
+              Search query analysis
+            </p>
+            <h1 className="display-type mt-4 max-w-4xl text-[clamp(2.3rem,5vw,4.1rem)] leading-[0.98] text-[#242b28]">
+              {query.trim().length > 0 ? query : "Explore your workspace"}
+            </h1>
+            <p className="mt-4 flex flex-wrap items-center gap-3 text-[1.05rem] text-[#686f6c]">
+              <span className="inline-flex items-center gap-2 text-[#272d2a]">
+                <SparkleIcon className="h-5 w-5 text-[#737792]" />
+                AI semantic matches
+              </span>
+              <span className="rounded-full bg-[#eaecf8] px-3 py-1 text-[0.72rem] uppercase tracking-[0.14em] text-[#5d647f]">
+                High confidence
+              </span>
+              {isSearching ? (
+                <span className="rounded-full bg-[#f0f1f4] px-3 py-1 text-[0.72rem] uppercase tracking-[0.14em] text-[#7b8186]">
+                  Searching
+                </span>
+              ) : null}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <button className={buttonClass}>
+              <FilterIcon />
+              Filter
+            </button>
+            <button className={buttonClass}>
+              <ShareIcon />
+              Share
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {results.length === 0 ? (
+        <div className={cx(panelClass, "p-8 text-center")}>
+          <p className="display-type text-[2rem] text-[#262d2a]">{emptyState}</p>
+          {message ? <p className="mt-3 text-sm text-[color:var(--danger)]">{message}</p> : null}
+        </div>
+      ) : (
+        <>
+          <section className="grid gap-4 xl:grid-cols-[1.55fr_0.9fr]">
+            <article className={cx(panelClass, "p-7")}>
+              {featuredResult ? (
+                <button className="w-full text-left" onClick={() => onSelectResult(featuredResult.fileId)}>
+                  <div className="flex flex-wrap items-center gap-3 text-sm text-[#747a80]">
+                    <span className="rounded-full bg-[#eff0f8] px-3 py-1 text-[0.78rem] font-medium text-[#676e88]">
+                      {kindLabel(featuredResult.kind)}
+                    </span>
+                    <span>{featuredResult.extension.toUpperCase() || "FILE"}</span>
+                    <span>{featuredResult.modifiedAt ? formatDate(featuredResult.modifiedAt) : "Unknown date"}</span>
+                  </div>
+
+                  <div className="mt-4 flex items-start justify-between gap-5">
+                    <h2 className="display-type max-w-3xl text-[2rem] leading-tight text-[#202724]">
+                      {featuredResult.name}
+                    </h2>
+                    <div className="text-right">
+                      <p className="display-type text-[3.3rem] leading-none text-[#e1e3ea]">
+                        {Math.min(99, Math.max(61, Math.round(featuredResult.score / 4)))}
+                      </p>
+                      <p className="text-xs uppercase tracking-[0.16em] text-[#7b8186]">
+                        Similarity
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="mt-5 max-w-4xl text-[1.05rem] leading-8 text-[#666d6a]">
+                    {featuredResult.snippet ??
+                      "This file surfaced through strong filename and metadata evidence. Open it to inspect the full contents."}
+                  </p>
+
+                  <div className="mt-6 flex flex-wrap items-center gap-4 text-sm text-[#5d647f]">
+                    <span className="inline-flex items-center gap-2">
+                      <ArrowRightIcon />
+                      Open preview
+                    </span>
+                    <span className="inline-flex items-center gap-2 text-[#7b8186]">
+                      <BookmarkIcon />
+                      Save result
+                    </span>
+                  </div>
+                </button>
+              ) : null}
+            </article>
+
+            <aside className="grid gap-4 md:grid-cols-3 xl:grid-cols-1">
+              {secondaryResults.map((result) => (
+                <button
+                  key={result.fileId}
+                  className={cx(panelClass, "p-5 text-left")}
+                  onClick={() => onSelectResult(result.fileId)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-lg font-semibold text-[#737792]">
+                      {Math.min(99, Math.max(48, Math.round(result.score / 4)))}%
+                    </p>
+                    <span className="text-[#7b8186]">{iconForKind(result.kind)}</span>
+                  </div>
+                  <p className="display-type mt-5 text-[1.55rem] leading-tight text-[#202724]">
+                    {result.name}
+                  </p>
+                  <p className="mt-4 text-sm leading-6 text-[#666d6a]">
+                    {result.snippet ?? shortPath(result.path)}
+                  </p>
+                </button>
+              ))}
+            </aside>
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <article className={cx(panelClass, "p-6")}>
+              <div className="flex items-center gap-3">
+                <ListIcon />
+                <h3 className="display-type text-[1.6rem] text-[#202724]">Explorer</h3>
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {(listResults.length > 0 ? listResults : results).map((result) => (
+                  <button
+                    key={result.fileId}
+                    className="flex w-full items-start gap-4 rounded-[22px] border border-black/5 bg-white/70 p-4 text-left transition hover:-translate-y-0.5 hover:bg-white"
+                    onClick={() => onSelectResult(result.fileId)}
+                  >
+                    <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#eef0f6] text-[#737792]">
+                      {iconForKind(result.kind)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[0.72rem] uppercase tracking-[0.14em] text-[#7b8186]">
+                        {kindLabel(result.kind)} • {result.modifiedAt ? formatRelativeDate(result.modifiedAt) : "Recently indexed"}
+                      </p>
+                      <p className="display-type mt-2 text-[1.3rem] leading-8 text-[#202724]">
+                        {result.name}
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-[#666d6a]">
+                        {result.snippet ?? result.path}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </article>
+
+            <aside className={cx(panelClass, "p-6")}>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="display-type text-[1.6rem] text-[#202724]">Selected file</h3>
+                {selectedFile ? (
+                  <span className="rounded-full bg-[#eff0f8] px-3 py-1 text-[0.72rem] uppercase tracking-[0.14em] text-[#676e88]">
+                    {contentStatusLabel(selectedFile.contentStatus)}
+                  </span>
+                ) : null}
+              </div>
+
+              {selectedFile ? (
+                <div className="mt-5 space-y-5">
+                  {selectedPreviewUrl ? (
+                    <div className="overflow-hidden rounded-[24px] bg-[#eef0f6]">
+                      <img src={selectedPreviewUrl} alt={selectedFile.name} className="h-60 w-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="grid h-60 place-items-center rounded-[24px] bg-[#eef0f6] text-[#737792]">
+                      {iconForKind(selectedFile.kind)}
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="display-type text-[1.8rem] leading-tight text-[#202724]">
+                      {selectedFile.name}
+                    </p>
+                    <p className="mt-3 text-sm leading-7 text-[#666d6a]">
+                      {selectedFile.contentSnippet ??
+                        "This file is available in your workspace. Use the actions below to open or reveal it."}
+                    </p>
+                  </div>
+
+                  <div className="grid gap-3 text-sm text-[#666d6a]">
+                    <InfoRow label="Location" value={selectedFile.path} />
+                    <InfoRow label="Root" value={selectedFile.rootPath} />
+                    <InfoRow label="Size" value={formatBytes(selectedFile.size)} />
+                    <InfoRow
+                      label="Modified"
+                      value={
+                        selectedFile.modifiedAt ? formatDate(selectedFile.modifiedAt) : "Unknown"
+                      }
+                    />
+                    {selectedFile.contentSource ? (
+                      <InfoRow label="Snippet source" value={selectedFile.contentSource} />
+                    ) : null}
+                  </div>
+
+                  {selectedFile.extractionError ? (
+                    <div className="rounded-[20px] bg-[#fff3ef] px-4 py-3 text-sm text-[color:var(--danger)]">
+                      {selectedFile.extractionError}
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap gap-3">
+                    <button className={primaryButtonClass} onClick={() => void onOpenFile(selectedFile.path)}>
+                      Open file
+                    </button>
+                    <button className={buttonClass} onClick={() => void onRevealFile(selectedFile.path)}>
+                      Reveal in Finder
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-5 rounded-[24px] bg-[#faf9f6] p-5 text-sm leading-7 text-[#666d6a]">
+                  Select a result to inspect the file, preview extracted text, and launch quick actions.
+                </div>
+              )}
+
+              {message ? <p className="mt-4 text-sm text-[color:var(--danger)]">{message}</p> : null}
+            </aside>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SourcesView({
+  roots,
+  statuses,
+  totalFiles,
+  runningIndexCount,
+  selectedRootIds,
+  toggleRoot,
+  onAddFolder,
+  onRescan,
+  onRescanAll,
+  onRemoveRoot,
+}: {
+  roots: IndexedRoot[];
+  statuses: Record<number, IndexStatus>;
+  totalFiles: number;
+  runningIndexCount: number;
+  selectedRootIds: number[];
+  toggleRoot: (rootId: number) => void;
+  onAddFolder: () => Promise<void>;
+  onRescan: (rootId: number) => Promise<void>;
+  onRescanAll: () => Promise<void>;
+  onRemoveRoot: (rootId: number) => Promise<void>;
+}) {
+  return (
+    <div className="space-y-6">
+      <section className="flex flex-col gap-4 px-1 pt-2 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-[0.82rem] uppercase tracking-[0.22em] text-[#727792]">
+            Source management
+          </p>
+          <h1 className="display-type mt-4 text-[clamp(2.5rem,5vw,3.8rem)] leading-[0.96] text-[#242b28]">
+            Sources & indexing
+          </h1>
+          <p className="mt-4 max-w-3xl text-[1.08rem] leading-8 text-[#6a716d]">
+            Manage local folders, monitor indexing progress, and keep your workspace ready for natural-language search.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <button className={buttonClass} onClick={() => void onRescanAll()}>
+            Re-index all
+          </button>
+          <button className={primaryButtonClass} onClick={() => void onAddFolder()}>
+            Connect source
+          </button>
+        </div>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-3">
+        <MetricPanel title="Total indexed" value={formatCompact(totalFiles)} note={`${roots.length} sources connected`} bar={70} />
+        <MetricPanel
+          title="Files processed"
+          value={totalFiles.toLocaleString()}
+          note={`${runningIndexCount} live job${runningIndexCount === 1 ? "" : "s"}`}
+          segmented
+        />
+        <MetricPanel
+          title="Sync status"
+          value={runningIndexCount > 0 ? "Active" : "Ready"}
+          note={
+            runningIndexCount > 0
+              ? "Background indexing in progress"
+              : "Last update just completed"
+          }
+          indicator
+        />
+      </section>
+
+      <section className={cx(panelClass, "p-6")}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="display-type text-[1.8rem] text-[#202724]">Active sources</h2>
+          <div className="text-sm text-[#727977]">
+            {selectedRootIds.length > 0
+              ? `${selectedRootIds.length} source filter${selectedRootIds.length === 1 ? "" : "s"} active`
+              : "Showing all connected sources"}
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          {roots.length > 0 ? (
+            roots.map((root) => {
               const status = statuses[root.id];
-              const isSelected = selectedRootIds.includes(root.id);
               const progress =
                 status && status.total > 0
                   ? Math.round((status.processed / status.total) * 100)
-                  : null;
+                  : root.status === "ready"
+                    ? 100
+                    : 0;
 
               return (
                 <article
                   key={root.id}
                   className={cx(
-                    subtlePanelClass,
-                    "p-3.5",
-                    isSelected && "border-[rgba(35,95,75,0.26)] bg-white/95",
+                    "grid gap-4 rounded-[24px] border border-black/5 bg-white/72 p-5 transition lg:grid-cols-[auto_minmax(0,1fr)_auto]",
+                    selectedRootIds.includes(root.id) && "ring-2 ring-[#7377921f]",
                   )}
                 >
-                  <button className="w-full text-left" onClick={() => toggleRoot(root.id)}>
-                    <span className="block break-words text-sm font-semibold text-[#17211d]">
-                      {root.path}
-                    </span>
-                    <span className="mt-1 inline-block text-sm text-[color:var(--text-soft)]">
-                      {root.fileCount.toLocaleString()} files
-                    </span>
+                  <button
+                    className="grid h-16 w-16 place-items-center rounded-[22px] bg-[#eceef6] text-[#737792]"
+                    onClick={() => toggleRoot(root.id)}
+                  >
+                    <FolderIcon />
                   </button>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2.5 text-sm text-[color:var(--text-soft)]">
-                    <span className={statusClass(root.status)}>{statusLabel(root.status)}</span>
-                    <span>
-                      {root.lastIndexedAt ? formatDate(root.lastIndexedAt) : "Not indexed yet"}
-                    </span>
-                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <p className="display-type text-[1.45rem] leading-8 text-[#202724]">
+                          {shortPath(root.path)}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-[#6d7470]">
+                          {root.path}
+                        </p>
+                      </div>
+                      <span className={statusPillClass(root.status)}>{statusLabel(root.status)}</span>
+                    </div>
 
-                  {status && status.status === "running" ? (
-                    <div className="mt-3">
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-[rgba(35,95,75,0.10)]">
-                        <span
-                          className="block h-full rounded-full bg-[linear-gradient(90deg,#dcb87b_0%,#4b8c74_100%)]"
-                          style={{ width: `${progress ?? 6}%` }}
+                    <div className="mt-4">
+                      <div className="flex items-center justify-between gap-3 text-sm text-[#70767a]">
+                        <span>Indexing progress</span>
+                        <span>
+                          {status && status.status === "running"
+                            ? `${progress}%`
+                            : root.status === "ready"
+                              ? "100%"
+                              : "Queued"}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-[#e5e6ea]">
+                        <div
+                          className="h-full rounded-full bg-[#737792]"
+                          style={{ width: `${Math.max(progress, root.status === "ready" ? 100 : 8)}%` }}
                         />
                       </div>
-                      <p className="mt-2 text-xs text-[color:var(--text-soft)]">
-                        {status.processed.toLocaleString()}
-                        {status.total > 0 ? ` / ${status.total.toLocaleString()}` : ""} files
-                      </p>
                     </div>
-                  ) : null}
 
-                  {root.lastError ? (
-                    <p className="mt-3 text-sm text-[color:var(--danger)]">{root.lastError}</p>
-                  ) : null}
+                    <div className="mt-4 flex flex-wrap gap-4 text-sm text-[#6d7470]">
+                      <span>{root.fileCount.toLocaleString()} files</span>
+                      <span>{root.lastIndexedAt ? formatDate(root.lastIndexedAt) : "Not indexed yet"}</span>
+                      {status?.currentPath ? <span className="truncate">{status.currentPath}</span> : null}
+                    </div>
 
-                  <div className="mt-4 flex flex-wrap gap-2.5">
-                    <button className={baseButtonClass} onClick={() => void handleRescan(root.id)}>
+                    {root.lastError ? (
+                      <p className="mt-3 text-sm text-[color:var(--danger)]">{root.lastError}</p>
+                    ) : null}
+                  </div>
+
+                  <div className="flex items-start gap-2 lg:flex-col">
+                    <button className={buttonClass} onClick={() => void onRescan(root.id)}>
+                      <RefreshIcon />
                       Rescan
                     </button>
                     <button
-                      className={cx(baseButtonClass, "text-[color:var(--danger)]")}
-                      onClick={() => void handleRemoveRoot(root.id)}
+                      className={cx(buttonClass, "text-[color:var(--danger)]")}
+                      onClick={() => void onRemoveRoot(root.id)}
                     >
                       Remove
                     </button>
                   </div>
                 </article>
               );
-            })}
-
-            {roots.length === 0 ? (
-              <div className={cx(subtlePanelClass, "p-4 text-sm text-[color:var(--text-soft)]")}>
-                <p>Add your first folder to start building a local file index.</p>
-              </div>
-            ) : null}
-          </div>
-        </aside>
-
-        <main className="flex min-h-0 flex-col gap-4">
-          <section className={cx(panelClass, "p-5 sm:p-6")}>
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-              <div>
-                <p className="mb-1 text-[0.72rem] uppercase tracking-[0.14em] text-[color:var(--text-soft)]">
-                  Natural file lookup
-                </p>
-                <h2 className="display-type max-w-[12ch] text-[2rem] leading-[1.02] text-[#17211d]">
-                  Find the right file without remembering the exact name
-                </h2>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2.5">
-                {runningIndexCount > 0 ? (
-                  <span className={statusClass("indexing")}>
-                    {runningIndexCount} indexing
-                  </span>
-                ) : null}
-                {isSearching ? <span className={statusClass("searching")}>Searching</span> : null}
-              </div>
-            </div>
-
-            <label className="mt-6 block">
-              <span className="text-sm text-[color:var(--text-soft)]">Search your files</span>
-              <input
-                className="mt-2 w-full rounded-[24px] border border-black/10 bg-[color:var(--panel-strong)] px-5 py-5 text-[1.05rem] text-[#17211d] shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] outline-none transition focus:border-[rgba(35,95,75,0.22)] focus:ring-4 focus:ring-[rgba(35,95,75,0.12)]"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={
-                  SEARCH_PLACEHOLDERS[Math.floor(Date.now() / 1000) % SEARCH_PLACEHOLDERS.length]
-                }
-              />
-            </label>
-
-            <div className="mt-4 flex flex-col gap-2 text-sm text-[color:var(--text-soft)] lg:flex-row lg:items-center lg:justify-between">
-              <p>
-                {query.trim().length === 0
-                  ? "Showing recent files from the indexed folders."
-                  : `Searching ${activeRootCount} folder views for “${query}”.`}
-              </p>
-              {message ? <p className="text-[color:var(--danger)]">{message}</p> : null}
-            </div>
-          </section>
-
-          <section className={cx(panelClass, "flex min-h-0 flex-1 flex-col p-5 sm:p-6")}>
-            <header className="flex flex-col gap-2 text-[color:var(--text-soft)] sm:flex-row sm:items-center sm:justify-between">
-              <h3 className="display-type text-[1.15rem] text-[#17211d]">
-                {query.trim().length === 0 ? "Recent files" : "Results"}
-              </h3>
-              <span className="text-sm">{results.length.toLocaleString()} shown</span>
-            </header>
-
-            {isHydrating ? (
-              <div className={cx(subtlePanelClass, "mt-4 p-4 text-sm text-[color:var(--text-soft)]")}>
-                <p>Loading your workspace…</p>
-              </div>
-            ) : null}
-
-            {!isHydrating && results.length === 0 ? (
-              <div className={cx(subtlePanelClass, "mt-4 p-4 text-sm text-[color:var(--text-soft)]")}>
-                <p>
-                  {roots.length === 0
-                    ? "Add a folder to start searching."
-                    : "No files matched that query yet."}
-                </p>
-              </div>
-            ) : null}
-
-            <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-auto pr-1">
-              {results.map((result) => (
-                <button
-                  key={result.fileId}
-                  className={cx(
-                    subtlePanelClass,
-                    "w-full p-4 text-left transition hover:-translate-y-0.5",
-                    result.fileId === selectedFileId &&
-                      "border-[rgba(35,95,75,0.26)] bg-white/95",
-                  )}
-                  onClick={() => setSelectedFileId(result.fileId)}
-                >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="display-type text-[1.1rem] leading-snug text-[#17211d]">
-                        {result.name}
-                      </p>
-                      <p className="mt-1 break-words text-sm text-[color:var(--text-soft)]">
-                        {result.path}
-                      </p>
-                    </div>
-                    <span className={kindClass(result.kind)}>{result.kind}</span>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap items-center gap-2.5 text-xs text-[color:var(--text-soft)] sm:text-sm">
-                    <span>{formatBytes(result.size)}</span>
-                    <span>
-                      {result.modifiedAt ? formatDate(result.modifiedAt) : "Unknown date"}
-                    </span>
-                    {result.score > 0 ? <span>score {result.score}</span> : null}
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {result.matchReasons.map((reason) => (
-                      <span
-                        key={reason}
-                        className="inline-flex items-center rounded-full bg-[color:var(--accent-wash)] px-2.5 py-1 text-xs font-medium text-[color:var(--accent-strong)]"
-                      >
-                        {reason}
-                      </span>
-                    ))}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-        </main>
-
-        <aside className={cx(panelClass, "flex flex-col p-5")}>
-          <header className="flex flex-col gap-2 text-[color:var(--text-soft)] sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="display-type text-[1.15rem] text-[#17211d]">Preview</h3>
-            {selectedFile ? <span className="text-sm">{selectedFile.kind}</span> : null}
-          </header>
-
-          {selectedFile ? (
-            <div className="mt-4 flex flex-1 flex-col gap-4">
-              {selectedPreviewUrl ? (
-                <div className="grid min-h-[240px] place-items-center rounded-[24px] border border-black/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(233,239,235,0.92))] p-3">
-                  <img
-                    src={selectedPreviewUrl}
-                    alt={selectedFile.name}
-                    className="max-h-[320px] w-full rounded-[22px] object-contain"
-                  />
-                </div>
-              ) : (
-                <div className="grid min-h-[240px] place-items-center rounded-[24px] border border-black/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(233,239,235,0.92))]">
-                  <span className="rounded-full bg-[color:var(--accent-wash)] px-4 py-2 text-xs uppercase tracking-[0.14em] text-[color:var(--accent-strong)]">
-                    {selectedFile.extension || "file"}
-                  </span>
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <div>
-                  <p className="mb-1 text-[0.72rem] uppercase tracking-[0.14em] text-[color:var(--text-soft)]">
-                    Selected file
-                  </p>
-                  <h3 className="display-type text-[1.3rem] leading-tight text-[#17211d]">
-                    {selectedFile.name}
-                  </h3>
-                </div>
-
-                <dl className="grid gap-3.5 text-sm">
-                  <MetadataRow label="Location" value={selectedFile.path} />
-                  <MetadataRow label="Root" value={selectedFile.rootPath} />
-                  <MetadataRow label="Size" value={formatBytes(selectedFile.size)} />
-                  <MetadataRow
-                    label="Modified"
-                    value={
-                      selectedFile.modifiedAt
-                        ? formatDate(selectedFile.modifiedAt)
-                        : "Unknown"
-                    }
-                  />
-                </dl>
-
-                <div className="flex flex-wrap gap-2.5">
-                  <button
-                    className={cx(
-                      baseButtonClass,
-                      "border-transparent bg-[linear-gradient(135deg,var(--accent)_0%,#2c7a61_100%)] text-[#f7fbf8]",
-                    )}
-                    onClick={() => void handleOpenFile(selectedFile.path)}
-                  >
-                    Open file
-                  </button>
-                  <button
-                    className={baseButtonClass}
-                    onClick={() => void handleRevealFile(selectedFile.path)}
-                  >
-                    Reveal in Finder
-                  </button>
-                </div>
-              </div>
-            </div>
+            })
           ) : (
-            <div className={cx(subtlePanelClass, "mt-4 p-4 text-sm text-[color:var(--text-soft)]")}>
-              <p>Select a result to inspect metadata and quick actions.</p>
+            <div className="rounded-[24px] bg-[#faf9f6] p-8 text-center text-[#6d7470]">
+              <p className="display-type text-[1.8rem] text-[#202724]">No sources connected yet.</p>
+              <p className="mt-3 text-base leading-7">
+                Add a local folder to start building your workspace index.
+              </p>
             </div>
           )}
-        </aside>
-      </div>
+        </div>
+      </section>
     </div>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function SettingsView({
+  headerTitle,
+  totalFiles,
+  roots,
+  currentStatusText,
+}: {
+  headerTitle: string;
+  totalFiles: number;
+  roots: IndexedRoot[];
+  currentStatusText: string;
+}) {
   return (
-    <div>
-      <span className="display-type block text-[1.75rem] leading-none text-[#17211d]">
-        {value}
-      </span>
-      <span className="mt-1 block text-sm text-[color:var(--text-soft)]">{label}</span>
+    <div className="space-y-6">
+      <section className="px-1 pt-2">
+        <p className="text-[0.82rem] uppercase tracking-[0.22em] text-[#727792]">
+          {headerTitle}
+        </p>
+        <h1 className="display-type mt-4 text-[clamp(2.5rem,5vw,3.8rem)] leading-[0.96] text-[#242b28]">
+          Tune the workspace behavior
+        </h1>
+        <p className="mt-4 max-w-3xl text-[1.08rem] leading-8 text-[#6a716d]">
+          These settings are placeholders for the next product layer, but the cards already reflect the live state of your local workspace.
+        </p>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-3">
+        <OverviewCard label="Workspace status" value={currentStatusText} meta="Live state from the local index" />
+        <OverviewCard label="Indexed files" value={totalFiles.toLocaleString()} meta="Searchable metadata and extracted text" />
+        <OverviewCard label="Connected sources" value={roots.length.toLocaleString()} meta="Local folders in your workspace" />
+      </section>
+
+      <section className={cx(panelClass, "p-6")}>
+        <h2 className="display-type text-[1.8rem] text-[#202724]">What comes next</h2>
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {[
+            "Semantic ranking powered by LanceDB",
+            "Richer previews for PDFs and Office docs",
+            "Saved search collections and pinned files",
+            "Incremental watchers for real-time refresh",
+          ].map((item) => (
+            <div key={item} className="rounded-[24px] bg-[#faf9f6] p-5 text-sm leading-7 text-[#6d7470]">
+              {item}
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
 
-function MetadataRow({ label, value }: { label: string; value: string }) {
+function SidebarLink({
+  label,
+  icon,
+  active,
+  onClick,
+  badge,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+  badge?: number;
+}) {
   return (
-    <div>
-      <dt className="text-[0.72rem] uppercase tracking-[0.1em] text-[color:var(--text-soft)]">
+    <button
+      className={cx(
+        "flex w-full items-center justify-between rounded-[18px] px-4 py-3.5 text-left text-[1.02rem] transition",
+        active ? "bg-white text-[#4d5577] shadow-[0_8px_20px_rgba(85,93,122,0.08)]" : "text-[#595f63] hover:bg-white/70",
+      )}
+      onClick={onClick}
+    >
+      <span className="flex items-center gap-3">
+        <span className={cx("text-[#737792]", active && "text-[#5a6386]")}>{icon}</span>
         {label}
-      </dt>
-      <dd className="mt-1 break-words text-[#17211d]">{value}</dd>
+      </span>
+      {badge ? (
+        <span className="rounded-full bg-[#eef0f5] px-2 py-0.5 text-xs text-[#737792]">
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function TopChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={cx(
+        "rounded-full px-4 py-2 transition",
+        active ? "bg-[#f3f0ea] text-[#232a27]" : "text-[#73797e] hover:bg-[#f7f4ef]",
+      )}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function OverviewCard({
+  label,
+  value,
+  meta,
+}: {
+  label: string;
+  value: string;
+  meta: string;
+}) {
+  return (
+    <div className="rounded-[24px] bg-[#faf9f6] p-5">
+      <p className="text-[0.75rem] uppercase tracking-[0.14em] text-[#7c8187]">{label}</p>
+      <p className="display-type mt-3 text-[1.9rem] leading-tight text-[#202724]">{value}</p>
+      <p className="mt-3 text-sm leading-6 text-[#6d7470]">{meta}</p>
+    </div>
+  );
+}
+
+function MetricPanel({
+  title,
+  value,
+  note,
+  bar,
+  segmented,
+  indicator,
+}: {
+  title: string;
+  value: string;
+  note: string;
+  bar?: number;
+  segmented?: boolean;
+  indicator?: boolean;
+}) {
+  return (
+    <div className={cx(panelClass, "p-6")}>
+      <p className="text-[0.75rem] uppercase tracking-[0.14em] text-[#7c8187]">{title}</p>
+      <div className="mt-4 flex items-end gap-3">
+        <p className="display-type text-[2.3rem] leading-none text-[#202724]">{value}</p>
+        {indicator ? <span className="mb-1 h-4 w-4 rounded-full bg-[#74d2b8]" /> : null}
+      </div>
+      <p className="mt-3 text-sm leading-6 text-[#6d7470]">{note}</p>
+      {typeof bar === "number" ? (
+        <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#e6e7ea]">
+          <div className="h-full rounded-full bg-[#737792]" style={{ width: `${bar}%` }} />
+        </div>
+      ) : null}
+      {segmented ? (
+        <div className="mt-5 grid grid-cols-4 gap-2">
+          {[32, 28, 22, 18].map((width) => (
+            <div key={width} className="h-2 rounded-full bg-[#dfe1e7]" style={{ width: `${width * 3}%` }} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1">
+      <dt className="text-[0.72rem] uppercase tracking-[0.14em] text-[#7c8187]">{label}</dt>
+      <dd className="break-words text-[#252c29]">{value}</dd>
     </div>
   );
 }
@@ -620,31 +1328,46 @@ function statusLabel(status: string) {
   }
 }
 
-function statusClass(status: string) {
+function statusPillClass(status: string) {
   switch (status) {
     case "ready":
-      return "inline-flex items-center rounded-full bg-[rgba(68,152,111,0.14)] px-2.5 py-1 text-xs font-medium text-[#20523f]";
+      return "inline-flex items-center rounded-full bg-[#e7f6f0] px-3 py-1 text-sm font-medium text-[#24604a]";
     case "indexing":
-      return "inline-flex items-center rounded-full bg-[rgba(179,132,59,0.15)] px-2.5 py-1 text-xs font-medium text-[#855c1a]";
+      return "inline-flex items-center rounded-full bg-[#f7efe0] px-3 py-1 text-sm font-medium text-[#8b6322]";
     case "error":
-      return "inline-flex items-center rounded-full bg-[rgba(178,84,59,0.14)] px-2.5 py-1 text-xs font-medium text-[#8d402c]";
-    case "searching":
-      return "inline-flex items-center rounded-full bg-white/75 px-2.5 py-1 text-xs font-medium text-[color:var(--text-soft)]";
+      return "inline-flex items-center rounded-full bg-[#fff0ec] px-3 py-1 text-sm font-medium text-[#9a4d3a]";
     default:
-      return "inline-flex items-center rounded-full bg-white/75 px-2.5 py-1 text-xs font-medium text-[color:var(--text-soft)]";
+      return "inline-flex items-center rounded-full bg-[#f0f1f4] px-3 py-1 text-sm font-medium text-[#72787d]";
   }
 }
 
-function kindClass(kind: string) {
-  switch (kind) {
-    case "image":
-      return "inline-flex items-center rounded-full bg-[rgba(63,116,167,0.14)] px-2.5 py-1 text-xs font-medium text-[#2c5378]";
-    case "document":
-    case "text":
-    case "code":
-      return "inline-flex items-center rounded-full bg-[rgba(35,95,75,0.12)] px-2.5 py-1 text-xs font-medium text-[color:var(--accent-strong)]";
+function contentStatusLabel(status: string | null) {
+  switch (status) {
+    case "indexed":
+      return "Indexed";
+    case "empty":
+      return "Empty";
+    case "error":
+      return "Error";
+    case "unsupported":
+      return "Unsupported";
     default:
-      return "inline-flex items-center rounded-full bg-white/75 px-2.5 py-1 text-xs font-medium text-[color:var(--text-soft)]";
+      return "Pending";
+  }
+}
+
+function kindLabel(kind: string) {
+  switch (kind) {
+    case "document":
+      return "Document";
+    case "image":
+      return "Image";
+    case "code":
+      return "Code";
+    case "text":
+      return "Text";
+    default:
+      return "File";
   }
 }
 
@@ -672,6 +1395,29 @@ function formatDate(timestamp: number) {
   }).format(new Date(timestamp * 1000));
 }
 
+function formatRelativeDate(timestamp: number) {
+  const days = Math.max(1, Math.round((Date.now() - timestamp * 1000) / (1000 * 60 * 60 * 24)));
+  if (days <= 1) {
+    return "Today";
+  }
+  if (days < 7) {
+    return `${days} days ago`;
+  }
+  return formatDate(timestamp);
+}
+
+function formatCompact(value: number) {
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function shortPath(path: string) {
+  const parts = path.split("/");
+  return parts.slice(-2).join("/") || path;
+}
+
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message;
@@ -682,4 +1428,207 @@ function getErrorMessage(error: unknown) {
 
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
+}
+
+function iconForKind(kind: string) {
+  switch (kind) {
+    case "image":
+      return <ImageIcon />;
+    case "code":
+      return <CodeIcon />;
+    default:
+      return <DocumentIcon />;
+  }
+}
+
+function LogoGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 8.5v7M8.5 12h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function HomeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M4 10.5 12 4l8 6.5v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1v-9Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ResultsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" opacity="0.2" />
+      <path d="M8 16v-4M12 16V8M16 16v-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DatabaseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <ellipse cx="12" cy="6.5" rx="7" ry="3.5" fill="currentColor" />
+      <path d="M5 6.5v5c0 1.93 3.13 3.5 7 3.5s7-1.57 7-3.5v-5M5 11.5v5c0 1.93 3.13 3.5 7 3.5s7-1.57 7-3.5v-5" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="m12 3 2 1 2.3-.3.9 2.1 1.8 1.4-.7 2.2.7 2.2-1.8 1.4-.9 2.1L14 20l-2 1-2-1-2.3.3-.9-2.1-1.8-1.4.7-2.2-.7-2.2 1.8-1.4.9-2.1L10 4l2-1Z" fill="currentColor" opacity="0.2" />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function UserIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M5 20a7 7 0 0 1 14 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className ?? "h-5 w-5"}>
+      <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SparkleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className ?? "h-5 w-5"}>
+      <path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3ZM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14ZM5 14l.9 2.1L8 17l-2.1.9L5 20l-.9-2.1L2 17l2.1-.9L5 14Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ArrowRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M5 12h14M13 5l7 7-7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M5 7h14M8 12h8M10 17h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <circle cx="18" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="6" cy="12" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="18" cy="19" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="m8.4 10.8 7.2-4.1M8.4 13.2l7.2 4.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6">
+      <path d="M4 8a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z" fill="currentColor" opacity="0.22" />
+      <path d="M4 8a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function DocumentIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6">
+      <path d="M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" fill="currentColor" opacity="0.2" />
+      <path d="M14 3v5h5M9 13h6M9 17h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ImageIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6">
+      <rect x="4" y="5" width="16" height="14" rx="2.5" fill="currentColor" opacity="0.16" />
+      <path d="M7 16 11 12l3 3 2-2 2 3M9 9.5h.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CodeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6">
+      <path d="m9 8-4 4 4 4M15 8l4 4-4 4M13 5l-2 14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function HelpIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M9.6 9.3a2.7 2.7 0 1 1 4.7 2c-.7.8-1.8 1.2-1.8 2.7M12 17h.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="m14 4 6 6-3 1-2 7-2-2-2 5-1-8-4-4 8-1Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <circle cx="6" cy="12" r="1.8" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+      <circle cx="18" cy="12" r="1.8" fill="currentColor" />
+    </svg>
+  );
+}
+
+function BookmarkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M7 4h10v16l-5-3-5 3V4Z" fill="currentColor" opacity="0.22" />
+      <path d="M7 4h10v16l-5-3-5 3V4Z" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function ListIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-[#737792]">
+      <path d="M5 7h14M5 12h14M5 17h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
 }

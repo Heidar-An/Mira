@@ -1,4 +1,5 @@
 mod commands;
+mod extractors;
 mod indexing;
 mod models;
 mod preview;
