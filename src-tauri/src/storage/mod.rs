@@ -11,7 +11,8 @@ pub use content::{
 };
 pub use files::{
     delete_files_by_ids, fetch_candidates, fetch_candidates_by_ids, fetch_file_details,
-    fetch_file_ids_by_paths, fetch_file_snapshots_by_paths, fetch_root_file_snapshots, index_file,
+    fetch_file_details_by_path, fetch_file_ids_by_paths, fetch_file_snapshots_by_paths,
+    fetch_root_file_snapshots, index_file,
 };
 pub use jobs::{
     create_index_job, fetch_job_by_id, fetch_latest_job, fetch_latest_jobs, mark_job_failed,

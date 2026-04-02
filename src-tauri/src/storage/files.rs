@@ -225,6 +225,20 @@ pub fn fetch_file_details(conn: &Connection, file_id: i64) -> Result<FileDetails
     Ok(details)
 }
 
+pub fn fetch_file_details_by_path(conn: &Connection, path: &str) -> Result<Option<FileDetails>> {
+    let file_id = conn.query_row(
+        "SELECT id FROM files WHERE path = ?1",
+        params![path],
+        |row| row.get(0),
+    );
+
+    match file_id {
+        Ok(file_id) => fetch_file_details(conn, file_id).map(Some),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn delete_files_by_ids(conn: &Connection, file_ids: &[i64]) -> Result<()> {
     if file_ids.is_empty() {
         return Ok(());

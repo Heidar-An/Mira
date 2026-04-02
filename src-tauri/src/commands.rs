@@ -101,6 +101,15 @@ pub fn get_file_details(file_id: i64, state: State<'_, AppState>) -> Result<File
 }
 
 #[tauri::command]
+pub fn get_file_details_by_path(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Option<FileDetails>, String> {
+    let conn = state.connection().map_err(err_to_string)?;
+    storage::fetch_file_details_by_path(&conn, &path).map_err(err_to_string)
+}
+
+#[tauri::command]
 pub fn open_file(path: String) -> Result<(), String> {
     shell::open_file(&path).map_err(err_to_string)
 }

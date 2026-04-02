@@ -27,6 +27,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::add_index_root,
             commands::get_file_details,
+            commands::get_file_details_by_path,
             commands::get_index_statuses,
             commands::list_index_roots,
             commands::open_file,
