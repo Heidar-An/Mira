@@ -47,6 +47,7 @@ pub struct SearchResult {
     pub match_reasons: Vec<String>,
     pub snippet: Option<String>,
     pub snippet_source: Option<String>,
+    pub preview_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

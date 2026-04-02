@@ -1,5 +1,7 @@
-import type { FileDetails, ResultViewMode, SearchResult } from "../app/types";
-import { iconForKind } from "./icons";
+import type { KeyboardEvent } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import type { FileDetails, SearchResult } from "../app/types";
+import { ArrowRightIcon, iconForKind } from "./icons";
 import {
   buildHighlightSegments,
   cx,
@@ -14,11 +16,7 @@ export interface HighlightedSnippetProps {
   className?: string;
 }
 
-export function HighlightedSnippet({
-  text,
-  query,
-  className,
-}: HighlightedSnippetProps) {
+export function HighlightedSnippet({ text, query, className }: HighlightedSnippetProps) {
   const segments = buildHighlightSegments(text, query);
 
   return (
@@ -39,62 +37,183 @@ export function HighlightedSnippet({
   );
 }
 
-export interface ResultExplorerCardProps {
+export interface ResultListRowProps {
   result: SearchResult;
   query: string;
-  layout: ResultViewMode;
+  selected: boolean;
   onSelectResult: (fileId: number) => void;
 }
 
-export function ResultExplorerCard({
+export function ResultListRow({
   result,
   query,
-  layout,
+  selected,
   onSelectResult,
-}: ResultExplorerCardProps) {
-  const cardClass =
-    layout === "grid"
-      ? "rounded-[24px] border border-black/5 bg-white/72 p-5 text-left transition hover:-translate-y-0.5 hover:bg-white"
-      : "flex w-full items-start gap-4 rounded-[22px] border border-black/5 bg-white/70 p-4 text-left transition hover:-translate-y-0.5 hover:bg-white";
-
+}: ResultListRowProps) {
   return (
-    <button className={cardClass} onClick={() => onSelectResult(result.fileId)}>
+    <button
+      type="button"
+      className={cx(
+        "flex w-full items-start gap-3 rounded-[20px] border p-3.5 text-left transition",
+        selected
+          ? "border-[#c8cede] bg-[#f5f7fd] shadow-[0_12px_30px_rgba(115,119,146,0.12)]"
+          : "border-black/5 bg-white/76 hover:bg-white",
+      )}
+      onClick={() => onSelectResult(result.fileId)}
+    >
       <div
         className={cx(
-          "grid shrink-0 place-items-center rounded-2xl bg-[#eef0f6] text-[#737792]",
-          layout === "grid" ? "h-14 w-14" : "h-12 w-12",
+          "grid h-10 w-10 shrink-0 place-items-center rounded-2xl text-[#737792]",
+          selected ? "bg-[#e8ebf8]" : "bg-[#eef0f6]",
         )}
       >
         {iconForKind(result.kind)}
       </div>
-      <div className={cx("min-w-0", layout === "grid" ? "mt-4" : "flex-1")}>
-        <p className="text-[0.72rem] uppercase tracking-[0.14em] text-[#7b8186]">
-          {kindLabel(result.kind)} •{" "}
-          {result.modifiedAt ? formatRelativeDate(result.modifiedAt) : "Recently indexed"}
-        </p>
-        <p className="display-type mt-2 text-[1.3rem] leading-8 text-[#202724]">
-          {result.name}
-        </p>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="min-w-0 flex-1 truncate text-[0.98rem] font-medium text-[#202724]">
+            {result.name}
+          </p>
+          <span className="rounded-full bg-[#f3f1ea] px-2 py-1 text-[0.64rem] uppercase tracking-[0.12em] text-[#6b7177]">
+            {kindLabel(result.kind)}
+          </span>
+        </div>
+
         <HighlightedSnippet
-          className="mt-2 text-sm leading-6 text-[#666d6a]"
+          className="mt-1.5 line-clamp-2 text-sm leading-6 text-[#666d6a]"
           text={result.snippet ?? result.path}
           query={query}
         />
-        <p className="mt-3 text-xs uppercase tracking-[0.12em] text-[#7b8186]">
-          {scoreSummary(result.scoreBreakdown)}
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {result.matchReasons.slice(0, 3).map((reason) => (
-            <span
-              key={`${result.fileId}-${reason}`}
-              className="rounded-full bg-[#f3f1ea] px-2.5 py-1 text-[0.68rem] uppercase tracking-[0.12em] text-[#686f88]"
-            >
-              {reason}
-            </span>
-          ))}
+
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.72rem] uppercase tracking-[0.12em] text-[#7b8186]">
+          <span>{result.modifiedAt ? formatRelativeDate(result.modifiedAt) : "Recently indexed"}</span>
+          <span>{scoreSummary(result.scoreBreakdown)}</span>
         </div>
       </div>
     </button>
+  );
+}
+
+export interface ResultGridCardProps {
+  result: SearchResult;
+  query: string;
+  selected: boolean;
+  onSelectResult: (fileId: number) => void;
+  onOpenPreview: (path: string) => Promise<void>;
+}
+
+export function ResultGridCard({
+  result,
+  query,
+  selected,
+  onSelectResult,
+  onOpenPreview,
+}: ResultGridCardProps) {
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelectResult(result.fileId);
+    }
+  }
+
+  return (
+    <article
+      className={cx(
+        "rounded-[22px] border p-3.5 transition",
+        selected
+          ? "border-[#c8cede] bg-[#f6f8fe] shadow-[0_12px_30px_rgba(115,119,146,0.12)]"
+          : "border-black/5 bg-white/76 hover:bg-white",
+      )}
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        className="w-full cursor-pointer text-left outline-none"
+        onClick={() => onSelectResult(result.fileId)}
+        onKeyDown={handleKeyDown}
+      >
+        <ResultGridPreview result={result} query={query} />
+
+        <div className="mt-3 flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-[#eef0f6] text-[#737792]">
+            {iconForKind(result.kind)}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[0.95rem] font-medium text-[#202724]">{result.name}</p>
+            <p className="mt-1 text-[0.7rem] uppercase tracking-[0.12em] text-[#7b8186]">
+              {kindLabel(result.kind)} •{" "}
+              {result.modifiedAt ? formatRelativeDate(result.modifiedAt) : "Recently indexed"}
+            </p>
+            <HighlightedSnippet
+              className="mt-2 line-clamp-3 text-sm leading-6 text-[#666d6a]"
+              text={result.snippet ?? result.path}
+              query={query}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="truncate text-[0.68rem] uppercase tracking-[0.12em] text-[#7b8186]">
+          {scoreSummary(result.scoreBreakdown)}
+        </span>
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-2 rounded-[14px] bg-[#737792] px-3 py-2 text-xs font-medium text-white transition hover:bg-[#676b86]"
+          onClick={() => void onOpenPreview(result.path)}
+        >
+          <ArrowRightIcon />
+          Open preview
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ResultGridPreview({ result, query }: { result: SearchResult; query: string }) {
+  const previewUrl = result.previewPath ? convertFileSrc(result.previewPath) : null;
+
+  if (previewUrl && result.kind === "image") {
+    return (
+      <div className="h-28 overflow-hidden rounded-[18px] bg-[radial-gradient(circle_at_top,rgba(228,231,250,0.45),transparent_55%),#eef0f6]">
+        <img src={previewUrl} alt={result.name} className="h-full w-full object-cover" />
+      </div>
+    );
+  }
+
+  if (previewUrl && result.extension.toLowerCase() === "pdf") {
+    return (
+      <div className="h-28 overflow-hidden rounded-[18px] bg-[#eef0f6]">
+        <iframe
+          src={`${previewUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+          title={`${result.name} preview`}
+          className="h-full w-full border-0 bg-white"
+        />
+      </div>
+    );
+  }
+
+  if (result.snippet) {
+    return (
+      <div className="h-28 rounded-[18px] border border-black/5 bg-[#fbfaf7] p-3">
+        <p className="text-[0.64rem] uppercase tracking-[0.14em] text-[#7c8187]">
+          Content preview
+        </p>
+        <HighlightedSnippet
+          className="mt-2 line-clamp-4 text-sm leading-5 text-[#555d59]"
+          text={result.snippet}
+          query={query}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid h-28 place-items-center rounded-[18px] bg-[#eef0f6] text-[#737792]">
+      {iconForKind(result.kind)}
+    </div>
   );
 }
 

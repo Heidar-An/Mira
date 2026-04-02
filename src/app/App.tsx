@@ -171,9 +171,6 @@ export function App() {
                 <ResultsView
                   query={state.query}
                   results={derived.visibleResults}
-                  featuredResult={derived.featuredResult}
-                  secondaryResults={derived.secondaryResults}
-                  listResults={derived.listResults}
                   selectedFile={state.selectedFile}
                   selectedPreviewUrl={derived.selectedPreviewUrl}
                   recentSearches={state.recentSearches}
@@ -187,11 +184,9 @@ export function App() {
                   onToggleKindFilter={actions.toggleKindFilter}
                   onClearKindFilters={actions.clearKindFilters}
                   onSelectResult={actions.showSearchPreview}
-                  onOpenPreview={actions.handleOpenPreview}
                   onToggleSavedResult={actions.toggleSavedResult}
                   onOpenFile={actions.handleOpenFile}
                   onRevealFile={actions.handleRevealFile}
-                  bindSelectedFileNode={refs.bindResultsPreviewNode}
                   message={state.message}
                 />
               )}

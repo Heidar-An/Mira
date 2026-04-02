@@ -39,7 +39,6 @@ export function useAppController(): AppController {
   const [isSearching, setIsSearching] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const homePreviewRef = useRef<HTMLDivElement | null>(null);
-  const resultsPreviewRef = useRef<HTMLDivElement | null>(null);
 
   const filteredRootIds = selectedRootIds.length > 0 ? selectedRootIds : undefined;
   const activeStatuses = useMemo(
@@ -79,9 +78,6 @@ export function useAppController(): AppController {
 
     return results.filter((result) => activeKinds.includes(result.kind));
   }, [activeKinds, results]);
-  const featuredResult = visibleResults[0] ?? null;
-  const secondaryResults = visibleResults.slice(1, 4);
-  const listResults = visibleResults.slice(4);
   const pinnedRoots = roots.slice(0, 3);
   const savedResultPaths = useMemo(
     () => new Set(savedResults.map((result) => result.path)),
@@ -291,12 +287,6 @@ export function useAppController(): AppController {
     setSelectedFile(details);
   }
 
-  async function handleOpenPreview(fileId: number) {
-    setCurrentView("results");
-    await showSearchPreview(fileId);
-    focusPreviewPanel(resultsPreviewRef);
-  }
-
   async function handleShowSavedResult(path: string) {
     const details = await loadFileDetailsByPath(path);
 
@@ -459,9 +449,6 @@ export function useAppController(): AppController {
       runningIndexCount,
       selectedPreviewUrl,
       visibleResults,
-      featuredResult,
-      secondaryResults,
-      listResults,
       pinnedRoots,
       savedResultPaths,
       currentStatusText,
@@ -472,7 +459,6 @@ export function useAppController(): AppController {
       setCurrentView,
       setResultViewMode,
       showSearchPreview,
-      handleOpenPreview,
       handleShowSavedResult,
       toggleSavedResult,
       removeSavedResult,
@@ -489,9 +475,6 @@ export function useAppController(): AppController {
     refs: {
       bindHomePreviewNode: (node) => {
         homePreviewRef.current = node;
-      },
-      bindResultsPreviewNode: (node) => {
-        resultsPreviewRef.current = node;
       },
     },
   };

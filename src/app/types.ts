@@ -52,6 +52,7 @@ export type SearchResult = {
   matchReasons: string[];
   snippet: string | null;
   snippetSource: string | null;
+  previewPath: string | null;
 };
 
 export type FileDetails = {
@@ -121,9 +122,6 @@ export type AppControllerDerived = {
   runningIndexCount: number;
   selectedPreviewUrl: string | null;
   visibleResults: SearchResult[];
-  featuredResult: SearchResult | null;
-  secondaryResults: SearchResult[];
-  listResults: SearchResult[];
   pinnedRoots: IndexedRoot[];
   savedResultPaths: Set<string>;
   currentStatusText: string;
@@ -135,7 +133,6 @@ export type AppControllerActions = {
   setCurrentView: (view: ViewName) => void;
   setResultViewMode: (mode: ResultViewMode) => void;
   showSearchPreview: (fileId: number) => Promise<void>;
-  handleOpenPreview: (fileId: number) => Promise<void>;
   handleShowSavedResult: (path: string) => Promise<void>;
   toggleSavedResult: (
     result: Pick<SavedResult, "path" | "name" | "kind" | "extension" | "modifiedAt">,
@@ -154,7 +151,6 @@ export type AppControllerActions = {
 
 export type AppControllerRefs = {
   bindHomePreviewNode: (node: HTMLDivElement | null) => void;
-  bindResultsPreviewNode: (node: HTMLDivElement | null) => void;
 };
 
 export type AppController = {

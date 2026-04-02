@@ -1,5 +1,6 @@
 use crate::{
     models::{ContentMatch, FileCandidate, ScoreBreakdown, SearchResult, SemanticMatch},
+    preview::preview_path_for_kind,
     semantic, storage,
     utils::unix_timestamp,
 };
@@ -24,22 +25,27 @@ pub fn search_files(
         return Ok(metadata_candidates
             .into_iter()
             .take(limit)
-            .map(|candidate| SearchResult {
-                file_id: candidate.file_id,
-                root_id: candidate.root_id,
-                name: candidate.name,
-                path: candidate.path,
-                extension: candidate.extension,
-                kind: candidate.kind,
-                size: candidate.size,
-                modified_at: candidate.modified_at,
-                indexed_at: candidate.indexed_at,
-                score: 0,
-                semantic_score: None,
-                score_breakdown: ScoreBreakdown::default(),
-                match_reasons: vec!["recent file".to_string()],
-                snippet: None,
-                snippet_source: None,
+            .map(|candidate| {
+                let preview_path =
+                    preview_path_for_kind(&candidate.path, &candidate.kind, &candidate.extension);
+                SearchResult {
+                    file_id: candidate.file_id,
+                    root_id: candidate.root_id,
+                    name: candidate.name,
+                    path: candidate.path,
+                    extension: candidate.extension,
+                    kind: candidate.kind,
+                    size: candidate.size,
+                    modified_at: candidate.modified_at,
+                    indexed_at: candidate.indexed_at,
+                    score: 0,
+                    semantic_score: None,
+                    score_breakdown: ScoreBreakdown::default(),
+                    match_reasons: vec!["recent file".to_string()],
+                    snippet: None,
+                    snippet_source: None,
+                    preview_path,
+                }
             })
             .collect());
     }
@@ -169,6 +175,8 @@ fn score_candidate(candidate: FileCandidate, query: &str, tokens: &[String]) -> 
         reasons.dedup();
     }
 
+    let preview_path = preview_path_for_kind(&candidate.path, &candidate.kind, &candidate.extension);
+
     SearchResult {
         file_id: candidate.file_id,
         root_id: candidate.root_id,
@@ -185,6 +193,7 @@ fn score_candidate(candidate: FileCandidate, query: &str, tokens: &[String]) -> 
         match_reasons: reasons,
         snippet: None,
         snippet_source: None,
+        preview_path,
     }
 }
 
@@ -199,6 +208,11 @@ fn merge_content_match(
 
     let entry = combined.entry(content_match.file_id).or_insert_with(|| {
         let recency = recency_boost(content_match.modified_at.or(Some(content_match.indexed_at)));
+        let preview_path = preview_path_for_kind(
+            &content_match.path,
+            &content_match.kind,
+            &content_match.extension,
+        );
         SearchResult {
             file_id: content_match.file_id,
             root_id: content_match.root_id,
@@ -218,6 +232,7 @@ fn merge_content_match(
             match_reasons: Vec::new(),
             snippet: None,
             snippet_source: None,
+            preview_path,
         }
     });
 
@@ -261,6 +276,8 @@ fn merge_semantic_match(
                 Some(candidate) => {
                     let recency =
                         recency_boost(candidate.modified_at.or(Some(candidate.indexed_at)));
+                    let preview_path =
+                        preview_path_for_kind(&candidate.path, &candidate.kind, &candidate.extension);
                     SearchResult {
                         file_id: candidate.file_id,
                         root_id: candidate.root_id,
@@ -280,6 +297,7 @@ fn merge_semantic_match(
                         match_reasons: Vec::new(),
                         snippet: None,
                         snippet_source: None,
+                        preview_path,
                     }
                 }
                 None => unreachable!("semantic result without fallback candidate"),
