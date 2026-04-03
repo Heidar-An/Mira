@@ -95,7 +95,16 @@ pub struct IndexStatus {
 pub struct SearchRequest {
     pub query: String,
     pub root_ids: Option<Vec<i64>>,
+    pub kinds: Option<Vec<String>>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+    pub has_more: bool,
 }
 
 #[derive(Debug)]

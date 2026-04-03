@@ -10,6 +10,7 @@ pub fn fetch_candidates(
     conn: &Connection,
     query: &str,
     root_ids: Option<&[i64]>,
+    kinds: Option<&[String]>,
     limit: usize,
 ) -> Result<Vec<FileCandidate>> {
     let mut sql = String::from(
@@ -28,6 +29,19 @@ pub fn fetch_candidates(
                     .join(", ")
             ));
             values.extend(root_ids.iter().copied().map(Value::Integer));
+        }
+    }
+
+    if let Some(kinds) = kinds {
+        if !kinds.is_empty() {
+            clauses.push(format!(
+                "kind IN ({})",
+                std::iter::repeat("?")
+                    .take(kinds.len())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            values.extend(kinds.iter().cloned().map(Value::Text));
         }
     }
 

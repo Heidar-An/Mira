@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import logoSrc from "../assets/logo.png";
 import { panelClass, primaryButtonClass } from "./constants";
 import { useAppController } from "./useAppController";
@@ -18,6 +19,7 @@ import { cx } from "../lib/appHelpers";
 
 export function App() {
   const { state, derived, actions, refs } = useAppController();
+  const mainScrollRef = useRef<HTMLDivElement | null>(null);
 
   return (
     <div className="min-h-dvh p-4 md:p-6">
@@ -101,7 +103,10 @@ export function App() {
 
         <main className={cx(panelClass, "overflow-hidden")}>
           <div className="flex h-full flex-col">
-            <div className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-7 sm:py-7">
+            <div
+              ref={mainScrollRef}
+              className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-7 sm:py-7"
+            >
               {state.currentView === "home" && (
                 <HomeView
                   roots={state.roots}
@@ -127,6 +132,11 @@ export function App() {
                   query={state.query}
                   setQuery={actions.setQuery}
                   results={derived.visibleResults}
+                  totalResultCount={derived.visibleResults.length}
+                  currentPage={derived.currentPage}
+                  hasMore={derived.hasMore}
+                  scrollContainerRef={mainScrollRef}
+                  onGoToPage={actions.goToPage}
                   selectedFile={state.selectedFile}
                   selectedPreviewUrl={derived.selectedPreviewUrl}
                   recentSearches={state.recentSearches}

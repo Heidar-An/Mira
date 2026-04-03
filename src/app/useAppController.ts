@@ -3,6 +3,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   FILE_TYPE_FILTERS_KEY,
+  PAGE_SIZE,
   RECENT_SEARCHES_KEY,
   RESULT_VIEW_MODE_KEY,
   SAVED_RESULTS_KEY,
@@ -16,6 +17,7 @@ import type {
   ResultViewMode,
   SavedResult,
   SearchRequest,
+  SearchResponse,
   SearchResult,
   ViewName,
 } from "./types";
@@ -37,8 +39,11 @@ export function useAppController(): AppController {
   const [currentView, setCurrentView] = useState<ViewName>("home");
   const [isHydrating, setIsHydrating] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
+  const [hasMoreResults, setHasMoreResults] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const homePreviewRef = useRef<HTMLDivElement | null>(null);
+  const searchIdRef = useRef(0);
 
   const filteredRootIds = selectedRootIds.length > 0 ? selectedRootIds : undefined;
   const activeStatuses = useMemo(
@@ -71,13 +76,7 @@ export function useAppController(): AppController {
   ).length;
   const selectedPreviewUrl =
     selectedFile?.previewPath ? convertFileSrc(selectedFile.previewPath) : null;
-  const visibleResults = useMemo(() => {
-    if (activeKinds.length === 0) {
-      return results;
-    }
-
-    return results.filter((result) => activeKinds.includes(result.kind));
-  }, [activeKinds, results]);
+  const visibleResults = results;
   const pinnedRoots = roots.slice(0, 3);
   const savedResultPaths = useMemo(
     () => new Set(savedResults.map((result) => result.path)),
@@ -115,12 +114,18 @@ export function useAppController(): AppController {
   }, []);
 
   useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length === 1) {
+      return;
+    }
+
+    const delay = trimmed.length === 0 ? 0 : 280;
     const timer = window.setTimeout(() => {
-      void runSearch(query, filteredRootIds);
-    }, 120);
+      void runSearch(query, currentPage, filteredRootIds, activeKinds);
+    }, delay);
 
     return () => window.clearTimeout(timer);
-  }, [query, filteredRootIds]);
+  }, [activeKinds, currentPage, filteredRootIds, query]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -130,11 +135,15 @@ export function useAppController(): AppController {
     return () => window.clearInterval(timer);
   }, []);
 
+  const prevQueryRef = useRef(query);
   useEffect(() => {
-    if (query.trim().length > 0 && currentView !== "results") {
-      setCurrentView("results");
+    if (query !== prevQueryRef.current) {
+      prevQueryRef.current = query;
+      if (query.trim().length > 0) {
+        setCurrentView("results");
+      }
     }
-  }, [query, currentView]);
+  }, [query]);
 
   useEffect(() => {
     if (visibleResults.length === 0) {
@@ -182,13 +191,17 @@ export function useAppController(): AppController {
       return;
     }
 
+    if (isSearching) {
+      return;
+    }
+
     void showSearchPreview(selectedResultFileId);
-  }, [currentView, selectedResultFileId]);
+  }, [currentView, isSearching, selectedResultFileId]);
 
   async function hydrate() {
     setIsHydrating(true);
     try {
-      await Promise.all([loadRoots(), refreshStatuses(), runSearch("", undefined)]);
+      await Promise.all([loadRoots(), refreshStatuses(), runSearch("", 1, undefined, activeKinds)]);
     } catch (error) {
       setMessage(getErrorMessage(error));
     } finally {
@@ -216,20 +229,37 @@ export function useAppController(): AppController {
     setRoots(nextRoots);
   }
 
-  async function runSearch(nextQuery: string, rootIds?: number[]) {
+  async function runSearch(
+    nextQuery: string,
+    page: number,
+    rootIds?: number[],
+    kinds: string[] = [],
+  ) {
+    const id = ++searchIdRef.current;
     setIsSearching(true);
     try {
       const payload: SearchRequest = {
         query: nextQuery,
-        limit: 60,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
       };
 
       if (rootIds && rootIds.length > 0) {
         payload.rootIds = rootIds;
       }
 
-      const nextResults = await invoke<SearchResult[]>("search_files", { request: payload });
-      setResults(nextResults);
+       if (kinds.length > 0) {
+        payload.kinds = kinds;
+      }
+
+      const response = await invoke<SearchResponse>("search_files", { request: payload });
+
+      if (id !== searchIdRef.current) {
+        return;
+      }
+
+      setResults(response.results);
+      setHasMoreResults(response.hasMore);
       if (nextQuery.trim().length >= 2) {
         setRecentSearches((current) => {
           const normalized = nextQuery.trim();
@@ -238,9 +268,14 @@ export function useAppController(): AppController {
       }
       setMessage(null);
     } catch (error) {
+      if (id !== searchIdRef.current) {
+        return;
+      }
       setMessage(getErrorMessage(error));
     } finally {
-      setIsSearching(false);
+      if (id === searchIdRef.current) {
+        setIsSearching(false);
+      }
     }
   }
 
@@ -351,7 +386,7 @@ export function useAppController(): AppController {
       const root = await invoke<IndexedRoot>("add_index_root", { path: selected });
       await invoke("start_index", { rootId: root.id });
       setCurrentView("sources");
-      await Promise.all([loadRoots(), refreshStatuses(), runSearch(query, filteredRootIds)]);
+      await Promise.all([loadRoots(), refreshStatuses(), runSearch(query, 1, filteredRootIds, activeKinds)]);
     } catch (error) {
       setMessage(getErrorMessage(error));
     }
@@ -383,7 +418,7 @@ export function useAppController(): AppController {
       await Promise.all([
         loadRoots(),
         refreshStatuses(),
-        runSearch(query, nextSelected.length > 0 ? nextSelected : undefined),
+        runSearch(query, 1, nextSelected.length > 0 ? nextSelected : undefined, activeKinds),
       ]);
     } catch (error) {
       setMessage(getErrorMessage(error));
@@ -406,7 +441,13 @@ export function useAppController(): AppController {
     }
   }
 
+  function updateQuery(value: string) {
+    setCurrentPage(1);
+    setQuery(value);
+  }
+
   function toggleRoot(rootId: number) {
+    setCurrentPage(1);
     setSelectedRootIds((current) =>
       current.includes(rootId)
         ? current.filter((id) => id !== rootId)
@@ -415,13 +456,27 @@ export function useAppController(): AppController {
   }
 
   function toggleKindFilter(kind: string) {
+    setCurrentPage(1);
     setActiveKinds((current) =>
       current.includes(kind) ? current.filter((entry) => entry !== kind) : [...current, kind],
     );
   }
 
   function clearKindFilters() {
+    setCurrentPage(1);
     setActiveKinds([]);
+  }
+
+  async function goToPage(page: number) {
+    if (page < 1) {
+      return;
+    }
+
+    if (page > currentPage && !hasMoreResults) {
+      return;
+    }
+
+    setCurrentPage(page);
   }
 
   return {
@@ -449,13 +504,15 @@ export function useAppController(): AppController {
       runningIndexCount,
       selectedPreviewUrl,
       visibleResults,
+      currentPage,
+      hasMore: hasMoreResults,
       pinnedRoots,
       savedResultPaths,
       currentStatusText,
       headerTitle,
     },
     actions: {
-      setQuery,
+      setQuery: updateQuery,
       setCurrentView,
       setResultViewMode,
       showSearchPreview,
@@ -471,6 +528,7 @@ export function useAppController(): AppController {
       toggleRoot,
       toggleKindFilter,
       clearKindFilters,
+      goToPage,
     },
     refs: {
       bindHomePreviewNode: (node) => {

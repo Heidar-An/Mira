@@ -147,11 +147,16 @@ export function SourcesView({
 
                   <div className="min-w-0">
                     <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                      <div>
-                        <p className="display-type text-[1.45rem] leading-8 text-[#202724]">
+                      <div className="min-w-0">
+                        <p
+                          className="display-type wrap-anywhere line-clamp-2 text-[1.45rem] leading-8 text-[#202724]"
+                          title={root.path}
+                        >
                           {shortPath(root.path)}
                         </p>
-                        <p className="mt-1 text-sm leading-6 text-[#6d7470]">{root.path}</p>
+                        <p className="wrap-anywhere mt-1 text-sm leading-6 text-[#6d7470]">
+                          {root.path}
+                        </p>
                       </div>
                       <span className={statusPillClass(root.status)}>{statusLabel(root.status)}</span>
                     </div>
@@ -201,7 +206,11 @@ export function SourcesView({
                           ? `Synced ${formatRelativeDate(root.lastSyncedAt)}`
                           : "Sync not started"}
                       </span>
-                      {status?.currentPath ? <span className="truncate">{status.currentPath}</span> : null}
+                      {status?.currentPath ? (
+                        <span className="min-w-0 basis-full truncate" title={status.currentPath}>
+                          {status.currentPath}
+                        </span>
+                      ) : null}
                     </div>
 
                     {root.lastError ? (

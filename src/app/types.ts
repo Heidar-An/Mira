@@ -81,7 +81,14 @@ export type FileDetails = {
 export type SearchRequest = {
   query: string;
   rootIds?: number[];
+  kinds?: string[];
   limit?: number;
+  offset?: number;
+};
+
+export type SearchResponse = {
+  results: SearchResult[];
+  hasMore: boolean;
 };
 
 export type SavedResult = {
@@ -122,6 +129,8 @@ export type AppControllerDerived = {
   runningIndexCount: number;
   selectedPreviewUrl: string | null;
   visibleResults: SearchResult[];
+  currentPage: number;
+  hasMore: boolean;
   pinnedRoots: IndexedRoot[];
   savedResultPaths: Set<string>;
   currentStatusText: string;
@@ -147,6 +156,7 @@ export type AppControllerActions = {
   toggleRoot: (rootId: number) => void;
   toggleKindFilter: (kind: string) => void;
   clearKindFilters: () => void;
+  goToPage: (page: number) => Promise<void>;
 };
 
 export type AppControllerRefs = {

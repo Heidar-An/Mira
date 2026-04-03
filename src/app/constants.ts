@@ -14,6 +14,8 @@ export const SUGGESTIONS = [
 
 export const FILE_TYPE_FILTERS = ["document", "image", "text", "code", "other"] as const;
 
+export const PAGE_SIZE = 10;
+
 export const RECENT_SEARCHES_KEY = "mira.recent-searches";
 export const RESULT_VIEW_MODE_KEY = "mira.result-view-mode";
 export const FILE_TYPE_FILTERS_KEY = "mira.file-type-filters";

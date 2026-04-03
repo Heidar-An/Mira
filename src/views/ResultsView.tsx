@@ -1,8 +1,12 @@
+import { useRef } from "react";
+import type { RefObject } from "react";
 import { FILE_TYPE_FILTERS, buttonClass, panelClass, primaryButtonClass } from "../app/constants";
 import type { FileDetails, ResultViewMode, SavedResult, SearchResult } from "../app/types";
 import { InfoRow, StatusNotice } from "../components/cards";
 import {
   BookmarkIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   DocumentIcon,
   FilterIcon,
   GridIcon,
@@ -29,6 +33,11 @@ export interface ResultsViewProps {
   query: string;
   setQuery: (value: string) => void;
   results: SearchResult[];
+  totalResultCount: number;
+  currentPage: number;
+  hasMore: boolean;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
+  onGoToPage: (page: number) => Promise<void>;
   selectedFile: FileDetails | null;
   selectedPreviewUrl: string | null;
   recentSearches: string[];
@@ -54,6 +63,11 @@ export function ResultsView({
   query,
   setQuery,
   results,
+  totalResultCount,
+  currentPage,
+  hasMore,
+  scrollContainerRef,
+  onGoToPage,
   selectedFile,
   selectedPreviewUrl,
   recentSearches,
@@ -72,6 +86,7 @@ export function ResultsView({
   onRevealFile,
   message,
 }: ResultsViewProps) {
+  const topAnchorRef = useRef<HTMLDivElement | null>(null);
   const emptyState = isHydrating
     ? "Loading your workspace..."
     : query.trim().length === 0
@@ -79,8 +94,26 @@ export function ResultsView({
       : "No files matched that query yet.";
   const selectedFileSaved = selectedFile ? savedResultPaths.has(selectedFile.path) : false;
 
+  async function handleGoToPage(page: number) {
+    if (page === currentPage) {
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+
+    await smoothScrollToTop(scrollContainerRef.current);
+    await onGoToPage(page);
+    await waitForNextPaint();
+    topAnchorRef.current?.focus({ preventScroll: true });
+    forceScrollToTop(scrollContainerRef.current);
+  }
+
   return (
     <div className="space-y-6">
+      <div ref={topAnchorRef} tabIndex={-1} className="outline-none" />
       <section className="px-1 pt-2">
         <div className="mx-auto mb-6 max-w-5xl rounded-[28px] border border-black/5 bg-white/78 p-3 shadow-[0_22px_60px_rgba(85,93,122,0.08)]">
           <div className="flex items-center gap-4 rounded-[22px] bg-[#fcfbf8] px-5 py-4">
@@ -107,7 +140,7 @@ export function ResultsView({
                 Hybrid lexical + visual matches
               </span>
               <span className="rounded-full bg-[#eaecf8] px-3 py-1 text-[0.72rem] uppercase tracking-[0.14em] text-[#5d647f]">
-                {results.length.toLocaleString()} result{results.length === 1 ? "" : "s"}
+                {totalResultCount.toLocaleString()}{hasMore ? "+" : ""} result{totalResultCount === 1 && !hasMore ? "" : "s"}
               </span>
               {isSearching ? (
                 <span className="rounded-full bg-[#f0f1f4] px-3 py-1 text-[0.72rem] uppercase tracking-[0.14em] text-[#7b8186]">
@@ -218,7 +251,7 @@ export function ResultsView({
                 </div>
               </div>
               <p className="text-sm text-[#727977]">
-                {results.length.toLocaleString()} shown
+                Page {currentPage}
               </p>
             </div>
 
@@ -251,6 +284,41 @@ export function ResultsView({
                 ),
               )}
             </div>
+
+            {(currentPage > 1 || hasMore) && (
+              <div className="mt-6 flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  className={cx(
+                    "grid h-10 w-10 place-items-center rounded-full border border-black/8 transition",
+                    currentPage <= 1
+                      ? "cursor-not-allowed text-[#c4c8cb]"
+                      : "bg-white/80 text-[#58605c] hover:-translate-y-0.5 hover:bg-white",
+                  )}
+                  onClick={() => void handleGoToPage(currentPage - 1)}
+                >
+                  <ChevronLeftIcon />
+                </button>
+                <span className="rounded-full bg-[#eff0f8] px-4 py-2 text-sm font-medium text-[#676e88]">
+                  Page {currentPage}
+                </span>
+
+                <button
+                  type="button"
+                  disabled={!hasMore}
+                  className={cx(
+                    "grid h-10 w-10 place-items-center rounded-full border border-black/8 transition",
+                    !hasMore
+                      ? "cursor-not-allowed text-[#c4c8cb]"
+                      : "bg-white/80 text-[#58605c] hover:-translate-y-0.5 hover:bg-white",
+                  )}
+                  onClick={() => void handleGoToPage(currentPage + 1)}
+                >
+                  <ChevronRightIcon />
+                </button>
+              </div>
+            )}
           </article>
 
           <aside className={cx(panelClass, "p-6")}>
@@ -275,7 +343,10 @@ export function ResultsView({
                 <div>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="display-type text-[1.8rem] leading-tight text-[#202724]">
+                      <p
+                        className="display-type wrap-anywhere line-clamp-2 text-[1.8rem] leading-tight text-[#202724]"
+                        title={selectedFile.name}
+                      >
                         {selectedFile.name}
                       </p>
                       <p className="mt-2 text-[0.72rem] uppercase tracking-[0.14em] text-[#7b8186]">
@@ -308,7 +379,7 @@ export function ResultsView({
                   </div>
 
                   <HighlightedSnippet
-                    className="mt-3 text-sm leading-7 text-[#666d6a]"
+                    className="mt-3 line-clamp-6 text-sm leading-7 text-[#666d6a]"
                     text={
                       selectedFile.contentSnippet ??
                       selectedFile.semanticSummary ??
@@ -384,4 +455,56 @@ export function ResultsView({
       )}
     </div>
   );
+}
+
+function smoothScrollToTop(container: HTMLElement | null): Promise<void> {
+  if (!container || container.scrollTop <= 0) {
+    return Promise.resolve();
+  }
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    container.scrollTop = 0;
+    return Promise.resolve();
+  }
+
+  const start = container.scrollTop;
+  const durationMs = 240;
+
+  return new Promise((resolve) => {
+    const startedAt = performance.now();
+
+    const step = (now: number) => {
+      const elapsed = now - startedAt;
+      const progress = Math.min(elapsed / durationMs, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      container.scrollTop = start * (1 - eased);
+
+      if (progress < 1) {
+        window.requestAnimationFrame(step);
+      } else {
+        container.scrollTop = 0;
+        resolve();
+      }
+    };
+
+    window.requestAnimationFrame(step);
+  });
+}
+
+function forceScrollToTop(container: HTMLElement | null) {
+  if (!container) {
+    return;
+  }
+
+  container.scrollTop = 0;
+}
+
+function waitForNextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        resolve();
+      });
+    });
+  });
 }

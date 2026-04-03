@@ -102,6 +102,7 @@ pub fn search_content_matches(
     conn: &Connection,
     fts_query: &str,
     root_ids: Option<&[i64]>,
+    kinds: Option<&[String]>,
     limit: usize,
 ) -> Result<Vec<ContentMatch>> {
     let mut sql = String::from(
@@ -133,6 +134,20 @@ pub fn search_content_matches(
             );
             sql.push(')');
             values.extend(root_ids.iter().copied().map(Value::Integer));
+        }
+    }
+
+    if let Some(kinds) = kinds {
+        if !kinds.is_empty() {
+            sql.push_str(" AND f.kind IN (");
+            sql.push_str(
+                &std::iter::repeat("?")
+                    .take(kinds.len())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            sql.push(')');
+            values.extend(kinds.iter().cloned().map(Value::Text));
         }
     }
 

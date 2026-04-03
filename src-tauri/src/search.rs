@@ -1,5 +1,7 @@
 use crate::{
-    models::{ContentMatch, FileCandidate, ScoreBreakdown, SearchResult, SemanticMatch},
+    models::{
+        ContentMatch, FileCandidate, ScoreBreakdown, SearchResponse, SearchResult, SemanticMatch,
+    },
     preview::preview_path_for_kind,
     semantic, storage,
     utils::unix_timestamp,
@@ -17,14 +19,18 @@ pub fn search_files(
     model_cache_dir: &Path,
     query: &str,
     root_ids: Option<&[i64]>,
+    kinds: Option<&[String]>,
     limit: usize,
-) -> Result<Vec<SearchResult>> {
-    let metadata_candidates = storage::fetch_candidates(conn, query, root_ids, limit)?;
+    offset: usize,
+) -> Result<SearchResponse> {
+    let effective_limit = offset + limit + 1;
+    let metadata_candidates =
+        storage::fetch_candidates(conn, query, root_ids, kinds, effective_limit)?;
 
     if query.is_empty() {
-        return Ok(metadata_candidates
+        let all: Vec<SearchResult> = metadata_candidates
             .into_iter()
-            .take(limit)
+            .take(effective_limit)
             .map(|candidate| {
                 let preview_path =
                     preview_path_for_kind(&candidate.path, &candidate.kind, &candidate.extension);
@@ -47,7 +53,14 @@ pub fn search_files(
                     preview_path,
                 }
             })
-            .collect());
+            .collect();
+
+        let has_more = all.len() > offset + limit;
+        let page = all.into_iter().skip(offset).take(limit).collect();
+        return Ok(SearchResponse {
+            results: page,
+            has_more,
+        });
     }
 
     let tokens = tokenize(query);
@@ -59,21 +72,38 @@ pub fn search_files(
     }
 
     if let Some(fts_query) = build_fts_query(&tokens) {
-        let content_matches =
-            storage::search_content_matches(conn, &fts_query, root_ids, limit * 8)?;
+        let content_matches = storage::search_content_matches(
+            conn,
+            &fts_query,
+            root_ids,
+            kinds,
+            effective_limit * 8,
+        )?;
 
         for (rank, content_match) in content_matches.into_iter().enumerate() {
             merge_content_match(&mut combined, content_match, &tokens, rank);
         }
     }
 
-    if let Ok(semantic_matches) =
-        semantic::search_semantic(vector_db_path, model_cache_dir, query, root_ids, limit * 3)
-    {
-        merge_semantic_matches(conn, &mut combined, semantic_matches);
+    if tokens.len() >= 2 || query.len() >= 3 {
+        if let Ok(semantic_matches) = semantic::search_semantic(
+            vector_db_path,
+            model_cache_dir,
+            query,
+            root_ids,
+            effective_limit * 3,
+        ) {
+            merge_semantic_matches(conn, &mut combined, semantic_matches);
+        }
     }
 
     let mut results = combined.into_values().collect::<Vec<_>>();
+    if let Some(kinds) = kinds {
+        if !kinds.is_empty() {
+            let allowed_kinds = kinds.iter().collect::<HashSet<_>>();
+            results.retain(|result| allowed_kinds.contains(&result.kind));
+        }
+    }
     results.sort_by(|left, right| {
         right
             .score
@@ -82,8 +112,13 @@ pub fn search_files(
             .then(right.modified_at.cmp(&left.modified_at))
             .then_with(|| left.name.cmp(&right.name))
     });
-    results.truncate(limit);
-    Ok(results)
+
+    let has_more = results.len() > offset + limit;
+    let page = results.into_iter().skip(offset).take(limit).collect();
+    Ok(SearchResponse {
+        results: page,
+        has_more,
+    })
 }
 
 fn merge_semantic_matches(

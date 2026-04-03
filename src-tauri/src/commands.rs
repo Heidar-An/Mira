@@ -1,6 +1,6 @@
 use crate::{
     indexing,
-    models::{FileDetails, IndexStatus, IndexedRoot, SearchRequest, SearchResult},
+    models::{FileDetails, IndexStatus, IndexedRoot, SearchRequest, SearchResponse},
     semantic, shell,
     state::AppState,
     storage,
@@ -79,17 +79,20 @@ pub fn get_index_statuses(state: State<'_, AppState>) -> Result<Vec<IndexStatus>
 pub fn search_files(
     request: SearchRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<SearchResult>, String> {
+) -> Result<SearchResponse, String> {
     let conn = state.connection().map_err(err_to_string)?;
     let query = request.query.trim().to_lowercase();
-    let limit = request.limit.unwrap_or(60).clamp(1, 200);
+    let limit = request.limit.unwrap_or(10).clamp(1, 200);
+    let offset = request.offset.unwrap_or(0);
     crate::search::search_files(
         &conn,
         &state.vector_db_path,
         &state.model_cache_dir,
         &query,
         request.root_ids.as_deref(),
+        request.kinds.as_deref(),
         limit,
+        offset,
     )
     .map_err(err_to_string)
 }

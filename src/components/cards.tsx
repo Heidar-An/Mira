@@ -107,7 +107,7 @@ export function InfoRow({ label, value }: InfoRowProps) {
   return (
     <div className="grid gap-1">
       <dt className="text-[0.72rem] uppercase tracking-[0.14em] text-[#7c8187]">{label}</dt>
-      <dd className="break-words text-[#252c29]">{value}</dd>
+      <dd className="wrap-anywhere min-w-0 text-[#252c29]">{value}</dd>
     </div>
   );
 }

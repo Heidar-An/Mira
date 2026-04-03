@@ -298,10 +298,13 @@ export function HomeView({
                   className="h-48 rounded-[20px]"
                 />
                 <div>
-                  <p className="display-type text-[1.35rem] leading-8 text-[#222825]">
+                  <p
+                    className="display-type wrap-anywhere line-clamp-2 text-[1.35rem] leading-8 text-[#222825]"
+                    title={selectedFile.name}
+                  >
                     {selectedFile.name}
                   </p>
-                  <p className="mt-2 text-sm leading-6 text-[#727977]">
+                  <p className="wrap-anywhere mt-2 line-clamp-4 text-sm leading-6 text-[#727977]">
                     {selectedFile.contentSnippet ??
                       "Run a search to surface extracted text snippets and file context here."}
                   </p>

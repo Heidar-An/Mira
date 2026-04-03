@@ -51,4 +51,9 @@
     font-family: var(--font-display);
     letter-spacing: -0.02em;
   }
+
+  .wrap-anywhere {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 }

@@ -20,7 +20,7 @@ export function HighlightedSnippet({ text, query, className }: HighlightedSnippe
   const segments = buildHighlightSegments(text, query);
 
   return (
-    <p className={className}>
+    <p className={cx("wrap-anywhere", className)}>
       {segments.map((segment, index) =>
         segment.highlight ? (
           <mark
@@ -185,12 +185,13 @@ function ResultGridPreview({ result, query }: { result: SearchResult; query: str
 
   if (previewUrl && result.extension.toLowerCase() === "pdf") {
     return (
-      <div className="h-28 overflow-hidden rounded-[18px] bg-[#eef0f6]">
+      <div className="relative h-28 overflow-hidden rounded-[18px] bg-[#eef0f6]">
         <iframe
           src={`${previewUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
           title={`${result.name} preview`}
-          className="h-full w-full border-0 bg-white"
+          className="pointer-events-none h-[calc(100%+80px)] w-full border-0 bg-white"
         />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#eef0f6] via-[#eef0f6]/92 to-transparent" />
       </div>
     );
   }

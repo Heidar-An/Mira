@@ -88,6 +88,41 @@ export function PlusIcon() {
   );
 }
 
+export function MinusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ExpandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path
+        d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path
+        d="m6 6 12 12M18 6 6 18"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function FilterIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
@@ -170,6 +205,22 @@ export function ListIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-[#737792]">
       <path d="M5 7h14M5 12h14M5 17h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ChevronLeftIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="m15 6-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+      <path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
