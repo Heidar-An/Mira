@@ -8,10 +8,11 @@ Mira is a local-first desktop application that turns your folders into a searcha
 
 ## Demo
 
-<p align="center">
-  <a href="https://youtu.be/GpXXga_i_U4"><strong>Watch the Mira demo video</strong></a><br />
-  <sub>YouTube</sub>
-</p>
+
+
+https://github.com/user-attachments/assets/6f75f301-d4b8-4240-9cd7-6f09f58cc2cf
+
+
 
 ---
 
