@@ -6,6 +6,12 @@ Mira is a local-first desktop application that turns your folders into a searcha
 
 ---
 
+## Install
+
+Download the latest macOS build from the [GitHub Releases page](https://github.com/Heidar-An/Mira/releases/latest).
+
+---
+
 ## Demo
 
 
