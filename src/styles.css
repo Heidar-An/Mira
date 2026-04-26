@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+:root {
+  color: #17211d;
+  color-scheme: light;
+  --font-ui: "Avenir Next", "Segoe UI Variable", "Trebuchet MS", sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", serif;
+  --panel: rgba(255, 252, 247, 0.88);
+  --panel-strong: rgba(255, 255, 255, 0.96);
+  --panel-border: rgba(50, 72, 62, 0.12);
+  --shadow: 0 18px 40px rgba(87, 88, 70, 0.12);
+  --text-soft: #55615b;
+  --accent: #235f4b;
+  --accent-strong: #174737;
+  --accent-wash: rgba(35, 95, 75, 0.12);
+  --danger: #b2543b;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-ui);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%;
+    background:
+      radial-gradient(circle at top left, rgba(238, 216, 189, 0.68), transparent 32%),
+      radial-gradient(circle at top right, rgba(182, 214, 197, 0.48), transparent 28%),
+      linear-gradient(180deg, #f3ece2 0%, #e8ede7 100%);
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .display-type {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+
+  .wrap-anywhere {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
