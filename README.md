@@ -10,6 +10,15 @@ Mira is a local-first desktop application that turns your folders into a searcha
 
 Download the latest macOS build from the [GitHub Releases page](https://github.com/Heidar-An/Mira/releases/latest).
 
+1. Open the `.dmg` and drag **Mira** into `Applications`.
+2. Because Mira is not yet notarized by Apple, macOS will show *"Mira is damaged and can't be opened"* on first launch. Remove the quarantine flag by running this once in Terminal:
+
+   ```bash
+   xattr -cr /Applications/Mira.app
+   ```
+
+3. Launch Mira from `Applications`.
+
 ---
 
 ## Demo
