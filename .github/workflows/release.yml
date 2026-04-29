@@ -16,8 +16,6 @@ jobs:
         include:
           - platform: macos-latest
             args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
             args: ''
           - platform: windows-latest
@@ -50,7 +48,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.args == '--target aarch64-apple-darwin' && 'aarch64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -69,15 +67,18 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Mira ${{ github.ref_name }}'
           releaseBody: |
-            Mira 0.1.2 adds support for videos, includes a round of bug fixes, and now ships downloadable builds for Windows and Linux alongside macOS.
+            Mira 0.1.3 adds support for videos, includes a round of bug fixes, and now ships downloadable builds for Windows and Linux alongside macOS.
 
             Highlights:
             - Video support across search and preview flows
             - Bug fixes and stability improvements
             - Release builds for Windows and Linux
             - Linux packaging fix for Ubuntu release builds
+            - Apple Silicon macOS release packaging
 
             **macOS users:** Mira is not yet notarized by Apple. After dragging Mira to `/Applications`, run this once in Terminal to remove the quarantine flag:
+
+            **Intel Mac users:** Mira's release automation currently ships Apple Silicon macOS builds only because ONNX Runtime no longer provides a working Intel macOS binary path for this dependency stack. Intel Macs can still build Mira from source.
 
             ```bash
             xattr -cr /Applications/Mira.app
