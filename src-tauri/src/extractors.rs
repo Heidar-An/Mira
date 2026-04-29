@@ -1,3 +1,4 @@
+use crate::media::{self, PendingMediaSegment, AUDIO_MODALITY, VIDEO_MODALITY};
 use anyhow::{Context, Result};
 use pdf_oxide::{parallel::extract_all_text_parallel, PdfDocument};
 use std::{
@@ -15,6 +16,7 @@ const PDF_PARALLEL_PAGE_THRESHOLD: usize = 48;
 
 #[derive(Debug, Clone)]
 pub struct TextChunk {
+    pub chunk_index: Option<i64>,
     pub source_label: Option<String>,
     pub text: String,
 }
@@ -25,16 +27,18 @@ pub struct ExtractionOutput {
     pub extractor: Option<String>,
     pub text_length: i64,
     pub chunks: Vec<TextChunk>,
+    pub media_segments: Vec<PendingMediaSegment>,
     pub error_message: Option<String>,
 }
 
-pub fn placeholder_output(kind: &str, extension: &str) -> ExtractionOutput {
-    if supports_content_extraction(kind, extension) {
+pub fn placeholder_output(kind: &str, extension: &str, provider: &str) -> ExtractionOutput {
+    if supports_content_extraction(kind, extension, provider) {
         ExtractionOutput {
             status: "pending".to_string(),
             extractor: Some(extractor_name(extension, kind).to_string()),
             text_length: 0,
             chunks: Vec::new(),
+            media_segments: Vec::new(),
             error_message: None,
         }
     } else {
@@ -42,17 +46,30 @@ pub fn placeholder_output(kind: &str, extension: &str) -> ExtractionOutput {
     }
 }
 
-pub fn supports_content_extraction(kind: &str, extension: &str) -> bool {
-    matches!(extension, "pdf" | "docx" | "pptx" | "xlsx") || matches!(kind, "text" | "code")
+pub fn supports_content_extraction(kind: &str, extension: &str, provider: &str) -> bool {
+    let _ = provider;
+    matches!(extension, "pdf" | "docx" | "pptx" | "xlsx")
+        || matches!(kind, "text" | "code")
+        || matches!(kind, AUDIO_MODALITY | VIDEO_MODALITY)
 }
 
-pub fn extract_file_text(path: &Path, kind: &str, extension: &str) -> ExtractionOutput {
+pub fn extract_file_text(
+    path: &Path,
+    kind: &str,
+    extension: &str,
+    provider: &str,
+    model_cache_dir: Option<&Path>,
+) -> ExtractionOutput {
+    let _ = provider;
     let result = match extension {
         "pdf" => extract_pdf(path),
         "docx" => extract_docx(path),
         "pptx" => extract_pptx(path),
         "xlsx" => extract_xlsx(path),
         _ if matches!(kind, "text" | "code") => extract_plain_text(path),
+        _ if matches!(kind, AUDIO_MODALITY | VIDEO_MODALITY) => {
+            return extract_media_segments(path, kind, model_cache_dir);
+        }
         _ => return unsupported_output(),
     };
 
@@ -63,6 +80,7 @@ pub fn extract_file_text(path: &Path, kind: &str, extension: &str) -> Extraction
             extractor: Some(extractor_name(extension, kind).to_string()),
             text_length: 0,
             chunks: Vec::new(),
+            media_segments: Vec::new(),
             error_message: Some(error.to_string()),
         },
     }
@@ -247,6 +265,7 @@ fn build_output(sections: Vec<(Option<String>, String)>, extractor: &str) -> Ext
             extractor: None,
             text_length: 0,
             chunks,
+            media_segments: Vec::new(),
             error_message: None,
         };
     }
@@ -256,6 +275,7 @@ fn build_output(sections: Vec<(Option<String>, String)>, extractor: &str) -> Ext
         extractor: Some(extractor.to_string()),
         text_length,
         chunks,
+        media_segments: Vec::new(),
         error_message: None,
     }
 }
@@ -266,6 +286,7 @@ fn unsupported_output() -> ExtractionOutput {
         extractor: None,
         text_length: 0,
         chunks: Vec::new(),
+        media_segments: Vec::new(),
         error_message: None,
     }
 }
@@ -275,7 +296,108 @@ fn extractor_name(extension: &str, kind: &str) -> &'static str {
         "pdf" => "pdf_oxide",
         "docx" | "pptx" | "xlsx" => "ooxml-zip",
         _ if matches!(kind, "text" | "code") => "plain-text",
+        _ if matches!(kind, AUDIO_MODALITY | VIDEO_MODALITY) => {
+            media::expected_media_extractor(kind).unwrap_or("media-segments")
+        }
         _ => "unsupported",
+    }
+}
+
+fn extract_media_segments(
+    path: &Path,
+    kind: &str,
+    model_cache_dir: Option<&Path>,
+) -> ExtractionOutput {
+    let _ = model_cache_dir;
+    eprintln!(
+        "[extract] media extraction start kind={} path={}",
+        kind,
+        path.display()
+    );
+    let windows = match media::plan_media_segments(path, kind) {
+        Ok(windows) => windows,
+        Err(error) => {
+            eprintln!(
+                "[extract] media extraction failed kind={} path={} error={}",
+                kind,
+                path.display(),
+                error
+            );
+            return ExtractionOutput {
+                status: "error".to_string(),
+                extractor: Some(extractor_name("", kind).to_string()),
+                text_length: 0,
+                chunks: Vec::new(),
+                media_segments: Vec::new(),
+                error_message: Some(error.to_string()),
+            };
+        }
+    };
+
+    if windows.is_empty() {
+        eprintln!(
+            "[extract] media extraction empty kind={} path={}",
+            kind,
+            path.display()
+        );
+        return ExtractionOutput {
+            status: "empty".to_string(),
+            extractor: Some(extractor_name("", kind).to_string()),
+            text_length: 0,
+            chunks: Vec::new(),
+            media_segments: Vec::new(),
+            error_message: None,
+        };
+    }
+
+    let mut media_segments = Vec::with_capacity(windows.len());
+    let total_segments = windows.len();
+    eprintln!(
+        "[extract] media extraction prepared kind={} path={} segments={}",
+        kind,
+        path.display(),
+        total_segments
+    );
+
+    for (segment_position, window) in windows.into_iter().enumerate() {
+        eprintln!(
+            "[extract] segment start kind={} path={} index={} progress={}/{} label={}",
+            kind,
+            path.display(),
+            window.segment_index,
+            segment_position + 1,
+            total_segments,
+            window.label
+        );
+        media_segments.push(PendingMediaSegment {
+            segment_index: window.segment_index,
+            modality: window.modality,
+            start_ms: window.start_ms,
+            end_ms: window.end_ms,
+            label: window.label,
+        });
+    }
+
+    let status = if media_segments.is_empty() {
+        "empty"
+    } else {
+        "indexed"
+    };
+    eprintln!(
+        "[extract] media extraction finished kind={} path={} status={} persisted_segments={}",
+        kind,
+        path.display(),
+        status,
+        media_segments.len(),
+    );
+
+    ExtractionOutput {
+        status: status.to_string(),
+        extractor: Some(extractor_name("", kind).to_string()),
+        text_length: 0,
+        chunks: Vec::new(),
+        media_segments,
+        error_message: None,
     }
 }
 
@@ -298,6 +420,7 @@ fn chunk_text(source_label: Option<String>, text: &str) -> Vec<TextChunk> {
         let chunk_text = words[start..end].join(" ");
         if chunk_text.len() >= MIN_CHUNK_CHARS {
             chunks.push(TextChunk {
+                chunk_index: None,
                 source_label: source_label.clone(),
                 text: chunk_text,
             });

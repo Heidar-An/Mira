@@ -15,6 +15,7 @@ pub fn replace_file_content(
         "DELETE FROM file_text_chunks WHERE file_id = ?1",
         params![file_id],
     )?;
+    super::replace_media_segments(conn, file_id, &output.media_segments)?;
 
     conn.execute(
         "INSERT INTO file_extracts (
@@ -56,7 +57,7 @@ pub fn replace_file_content(
     for (chunk_index, chunk) in output.chunks.iter().enumerate() {
         insert_chunk.execute(params![
             file_id,
-            chunk_index as i64,
+            chunk.chunk_index.unwrap_or(chunk_index as i64),
             chunk.source_label.as_deref(),
             &chunk.text
         ])?;
@@ -71,9 +72,16 @@ pub fn fetch_content_preview(conn: &Connection, file_id: i64) -> Result<FileCont
             "SELECT e.status,
                     c.text,
                     c.source_label,
+                    m.modality,
+                    m.label,
+                    m.start_ms,
+                    m.end_ms,
                     e.error_message
              FROM file_extracts e
              LEFT JOIN file_text_chunks c ON c.file_id = e.file_id
+             LEFT JOIN media_segments m
+               ON m.file_id = c.file_id
+              AND m.segment_index = c.chunk_index
              WHERE e.file_id = ?1
              ORDER BY CAST(c.chunk_index AS INTEGER) ASC
              LIMIT 1",
@@ -84,7 +92,11 @@ pub fn fetch_content_preview(conn: &Connection, file_id: i64) -> Result<FileCont
                     content_status: row.get(0)?,
                     content_snippet: text.as_deref().map(truncate_preview),
                     content_source: row.get(2)?,
-                    extraction_error: row.get(3)?,
+                    segment_modality: row.get(3)?,
+                    segment_label: row.get(4)?,
+                    segment_start_ms: row.get(5)?,
+                    segment_end_ms: row.get(6)?,
+                    extraction_error: row.get(7)?,
                 })
             },
         )
@@ -94,6 +106,10 @@ pub fn fetch_content_preview(conn: &Connection, file_id: i64) -> Result<FileCont
         content_status: None,
         content_snippet: None,
         content_source: None,
+        segment_modality: None,
+        segment_label: None,
+        segment_start_ms: None,
+        segment_end_ms: None,
         extraction_error: None,
     }))
 }
@@ -116,9 +132,16 @@ pub fn search_content_matches(
                 f.modified_at,
                 f.indexed_at,
                 file_text_chunks.source_label,
-                file_text_chunks.text
+                file_text_chunks.text,
+                m.modality,
+                m.label,
+                m.start_ms,
+                m.end_ms
          FROM file_text_chunks
          JOIN files f ON f.id = file_text_chunks.file_id
+         LEFT JOIN media_segments m
+           ON m.file_id = file_text_chunks.file_id
+          AND m.segment_index = file_text_chunks.chunk_index
          WHERE file_text_chunks MATCH ?",
     );
     let mut values = vec![Value::Text(fts_query.to_string())];
@@ -168,6 +191,10 @@ pub fn search_content_matches(
             indexed_at: row.get(8)?,
             source_label: row.get(9)?,
             text: row.get(10)?,
+            segment_modality: row.get(11)?,
+            segment_label: row.get(12)?,
+            segment_start_ms: row.get(13)?,
+            segment_end_ms: row.get(14)?,
         })
     })?;
 

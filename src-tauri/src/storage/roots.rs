@@ -166,6 +166,22 @@ pub fn mark_root_synced(conn: &Connection, root_id: i64, now: i64) -> Result<()>
     Ok(())
 }
 
+pub fn set_root_last_error(
+    conn: &Connection,
+    root_id: i64,
+    last_error: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE indexed_roots
+         SET last_error = ?2,
+             updated_at = ?3
+         WHERE id = ?1",
+        params![root_id, last_error, now],
+    )?;
+    Ok(())
+}
+
 pub fn refresh_root_file_count(conn: &Connection, root_id: i64, now: i64) -> Result<()> {
     conn.execute(
         "UPDATE indexed_roots

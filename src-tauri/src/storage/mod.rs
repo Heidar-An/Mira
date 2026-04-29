@@ -1,6 +1,7 @@
 mod content;
 mod files;
 mod jobs;
+mod media;
 mod roots;
 mod schema;
 mod semantic;
@@ -19,10 +20,12 @@ pub use jobs::{
     create_index_job, fetch_job_by_id, fetch_latest_job, fetch_latest_jobs, mark_job_failed,
     update_job_progress, update_root_ready,
 };
+pub use media::{fetch_semantic_media_sources, replace_media_segments, sync_media_content_status};
 pub use roots::{
     fetch_roots, insert_or_update_root, list_root_watch_entries, lookup_root_path,
     lookup_root_record, lookup_root_status, mark_root_change_detected, mark_root_synced,
     mark_root_syncing, mark_root_watch_state, refresh_root_file_count, remove_root,
+    set_root_last_error,
 };
 pub use schema::{initialize_database, open_connection};
 pub use semantic::{

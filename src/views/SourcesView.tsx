@@ -1,6 +1,6 @@
 import { buttonClass, panelClass, primaryButtonClass } from "../app/constants";
 import type { IndexStatus, IndexedRoot } from "../app/types";
-import { MetricPanel, PassProgressRow } from "../components/cards";
+import { MetricPanel, PassProgressRow, StatusNotice } from "../components/cards";
 import { FolderIcon, RefreshIcon } from "../components/icons";
 import {
   cx,
@@ -14,6 +14,7 @@ import {
   stagePercent,
   statusLabel,
   statusPillClass,
+  summarizeRootError,
   syncStatusLabel,
 } from "../lib/appHelpers";
 
@@ -50,6 +51,8 @@ export function SourcesView({
   onRescanAll,
   onRemoveRoot,
 }: SourcesViewProps) {
+  const blockedSemanticRoots = roots.filter((root) => summarizeRootError(root.lastError)?.tone === "warning");
+
   return (
     <div className="space-y-6">
       <section className="flex flex-col gap-4 px-1 pt-2 lg:flex-row lg:items-start lg:justify-between">
@@ -97,7 +100,9 @@ export function SourcesView({
           title="Semantic enriched"
           value={formatPassValue(totalSemanticIndexed, totalSemanticIndexed + totalSemanticPending)}
           note={
-            runningIndexCount > 0
+            blockedSemanticRoots.length > 0
+              ? `${blockedSemanticRoots.length} source${blockedSemanticRoots.length === 1 ? "" : "s"} paused by Gemini quota or rate limits`
+              : runningIndexCount > 0
               ? "Fast metadata pass is still running"
               : totalSemanticPending > 0
                 ? `${totalSemanticPending.toLocaleString()} files still preparing for smart search`
@@ -121,6 +126,7 @@ export function SourcesView({
           {roots.length > 0 ? (
             roots.map((root) => {
               const status = statuses[root.id];
+              const issue = summarizeRootError(root.lastError);
               const metadataProgress =
                 status && status.total > 0
                   ? Math.round((status.processed / status.total) * 100)
@@ -213,8 +219,10 @@ export function SourcesView({
                       ) : null}
                     </div>
 
-                    {root.lastError ? (
-                      <p className="mt-3 text-sm text-[color:var(--danger)]">{root.lastError}</p>
+                    {issue ? (
+                      <div className="mt-4">
+                        <StatusNotice tone={issue.tone} title={issue.title} body={issue.body} />
+                      </div>
                     ) : null}
                   </div>
 

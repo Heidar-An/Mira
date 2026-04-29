@@ -17,7 +17,7 @@ import { HomeView } from "../views/HomeView";
 import { ResultsView } from "../views/ResultsView";
 import { SettingsView } from "../views/SettingsView";
 import { SourcesView } from "../views/SourcesView";
-import { cx } from "../lib/appHelpers";
+import { cx, isGeminiQuotaError } from "../lib/appHelpers";
 
 type PendingSettingsExit =
   | { type: "view"; view: ViewName }
@@ -30,6 +30,8 @@ export function App() {
   const closeBypassRef = useRef(false);
   const settingsHasChangesRef = useRef(derived.settingsHasChanges);
   const [pendingSettingsExit, setPendingSettingsExit] = useState<PendingSettingsExit | null>(null);
+  const attentionRootCount = state.roots.filter((root) => Boolean(root.lastError)).length;
+  const quotaBlockedRootCount = state.roots.filter((root) => isGeminiQuotaError(root.lastError)).length;
 
   useEffect(() => {
     settingsHasChangesRef.current = derived.settingsHasChanges;
@@ -184,7 +186,11 @@ export function App() {
               {derived.currentStatusText}
             </p>
             <p className="mt-2 text-sm leading-6 text-[#68716d]">
-              {derived.runningIndexCount > 0
+              {attentionRootCount > 0
+                ? quotaBlockedRootCount > 0
+                  ? `${quotaBlockedRootCount} source${quotaBlockedRootCount === 1 ? "" : "s"} paused by Gemini quota or rate limits. Open Sources for details or switch to Local embeddings.`
+                  : `${attentionRootCount} source${attentionRootCount === 1 ? "" : "s"} need attention. Open Sources for details.`
+                : derived.runningIndexCount > 0
                 ? "Mira is scanning your folders in the background."
                 : derived.totalContentPending > 0 || derived.totalSemanticPending > 0
                   ? "Basic search is ready while file contents and image search finish preparing."

@@ -53,6 +53,14 @@ export function rootPipelineLabel(root: IndexedRoot, status?: IndexStatus) {
     return "Scanning metadata";
   }
 
+  if (root.lastError && isGeminiQuotaError(root.lastError)) {
+    return "Paused by Gemini quota";
+  }
+
+  if (root.lastError) {
+    return "Needs attention";
+  }
+
   if (root.contentPendingCount > 0) {
     return "Extracting content";
   }
@@ -101,6 +109,7 @@ export function scoreSummary(scoreBreakdown: ScoreBreakdown, semanticScore?: num
     scoreBreakdown.lexical +
     scoreBreakdown.semanticText +
     scoreBreakdown.semanticImage +
+    scoreBreakdown.semanticMedia +
     scoreBreakdown.intent +
     scoreBreakdown.recency;
 
@@ -109,6 +118,7 @@ export function scoreSummary(scoreBreakdown: ScoreBreakdown, semanticScore?: num
     scoreBreakdown.lexical > 0 ? `lex ${scoreBreakdown.lexical}` : null,
     scoreBreakdown.semanticText > 0 ? `sem-t ${scoreBreakdown.semanticText}` : null,
     scoreBreakdown.semanticImage > 0 ? `sem-i ${scoreBreakdown.semanticImage}` : null,
+    scoreBreakdown.semanticMedia > 0 ? `sem-m ${scoreBreakdown.semanticMedia}` : null,
     scoreBreakdown.intent !== 0 ? `intent ${scoreBreakdown.intent}` : null,
     scoreBreakdown.recency > 0 ? `rec ${scoreBreakdown.recency}` : null,
     semanticScore != null ? `sim ${semanticScore.toFixed(3)}` : null,
@@ -258,6 +268,71 @@ export function readStoredSavedResults(key: string) {
   } catch {
     return [];
   }
+}
+
+export function isGeminiQuotaError(message: string | null | undefined) {
+  if (!message) {
+    return false;
+  }
+
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("quota exceeded")
+    || lowered.includes("rate limited")
+    || lowered.includes("rate limit")
+    || lowered.includes("resource exhausted")
+    || lowered.includes("billing")
+  );
+}
+
+export function summarizeRootError(message: string | null | undefined) {
+  if (!message) {
+    return null;
+  }
+
+  if (isGeminiQuotaError(message)) {
+    const retry = extractRetryDelay(message);
+    return {
+      tone: "warning" as const,
+      title: "Gemini quota reached",
+      body: retry
+        ? `Semantic indexing is paused because Gemini asked Mira to retry in about ${retry}. Wait a minute, check your Gemini quota, or switch to Local embeddings in Settings.`
+        : "Semantic indexing is paused because Gemini quota or rate limits were reached. Wait a minute, check your Gemini quota, or switch to Local embeddings in Settings.",
+    };
+  }
+
+  return {
+    tone: "danger" as const,
+    title: "Indexing needs attention",
+    body: truncateMessage(message, 220),
+  };
+}
+
+function extractRetryDelay(message: string) {
+  const match = message.match(/retry (?:in|after)\s+(\d+(?:\.\d+)?)s?/i);
+  if (!match) {
+    return null;
+  }
+
+  const seconds = Number.parseFloat(match[1]);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+
+  if (seconds < 90) {
+    return `${Math.max(1, Math.round(seconds))} seconds`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+function truncateMessage(message: string, limit: number) {
+  if (message.length <= limit) {
+    return message;
+  }
+
+  return `${message.slice(0, limit - 1)}…`;
 }
 
 export function isSavedResult(value: unknown): value is SavedResult {

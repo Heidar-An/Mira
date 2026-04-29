@@ -65,6 +65,16 @@ pub fn initialize_database(path: &Path) -> Result<()> {
             error_message TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS media_segments (
+            file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            segment_index INTEGER NOT NULL,
+            modality TEXT NOT NULL,
+            start_ms INTEGER NOT NULL,
+            end_ms INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            PRIMARY KEY (file_id, segment_index)
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS file_text_chunks USING fts5(
             file_id UNINDEXED,
             chunk_index UNINDEXED,
@@ -80,6 +90,8 @@ pub fn initialize_database(path: &Path) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_index_jobs_root_id ON index_jobs(root_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_file_extracts_status ON file_extracts(status);
         CREATE INDEX IF NOT EXISTS idx_file_semantic_index_status ON file_semantic_index(status);
+        CREATE INDEX IF NOT EXISTS idx_media_segments_file_id ON media_segments(file_id);
+        CREATE INDEX IF NOT EXISTS idx_media_segments_modality ON media_segments(modality);
 
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,

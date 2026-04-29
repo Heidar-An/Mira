@@ -113,6 +113,8 @@ pub fn run_index_job(
     storage::update_job_progress(db_path, root_id, job_id, 0, total, None)?;
 
     let mut conn = storage::open_connection(db_path)?;
+    let settings = storage::settings::load_settings(&conn).unwrap_or_default();
+    let provider = settings.embedding_provider;
     let existing_by_path = storage::fetch_root_file_snapshots(&conn, root_id)?
         .into_iter()
         .map(|snapshot| (snapshot.path.clone(), snapshot))
@@ -142,7 +144,7 @@ pub fn run_index_job(
     for batch in files.chunks(INDEX_BATCH_SIZE) {
         let prepared_batch = batch
             .par_iter()
-            .map(|path| prepare_file(path))
+            .map(|path| prepare_file(path, &provider))
             .collect::<Vec<_>>();
 
         let tx = conn.transaction()?;
@@ -233,6 +235,8 @@ fn run_incremental_sync_job(
     }
 
     let mut conn = storage::open_connection(db_path)?;
+    let settings = storage::settings::load_settings(&conn).unwrap_or_default();
+    let provider = settings.embedding_provider;
     let now = unix_timestamp();
     storage::mark_root_syncing(&conn, root_id, now)?;
 
@@ -269,7 +273,7 @@ fn run_incremental_sync_job(
 
     let prepared_batch = normalized_changed_paths
         .par_iter()
-        .map(|path| prepare_incremental_file(path))
+        .map(|path| prepare_incremental_file(path, &provider, model_cache_dir))
         .collect::<Vec<_>>();
 
     let mut semantic_items = Vec::new();
@@ -388,7 +392,7 @@ pub fn classify_kind(extension: &str) -> &'static str {
         | "sql" | "sh" => "code",
         "zip" | "tar" | "gz" | "rar" | "7z" => "archive",
         "mp3" | "wav" | "aac" | "m4a" | "flac" => "audio",
-        "mp4" | "mov" | "mkv" | "avi" | "webm" => "video",
+        "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" | "mpg" | "mpeg" => "video",
         _ => "other",
     }
 }
@@ -419,7 +423,17 @@ fn run_content_backfill_job(
     }
 
     let candidates = storage::fetch_content_backfill_candidates(&conn, root_id)?;
+    eprintln!(
+        "[index] content backfill start root_id={} job_id={} candidates={}",
+        root_id,
+        job_id,
+        candidates.len()
+    );
     if candidates.is_empty() {
+        eprintln!(
+            "[index] content backfill no candidates root_id={} job_id={}",
+            root_id, job_id
+        );
         drop(conn);
         spawn_semantic_backfill_job(
             db_path.to_path_buf(),
@@ -431,17 +445,33 @@ fn run_content_backfill_job(
         return Ok(());
     }
 
-    for batch in candidates.chunks(CONTENT_BACKFILL_BATCH_SIZE) {
+    for (batch_index, batch) in candidates.chunks(CONTENT_BACKFILL_BATCH_SIZE).enumerate() {
         if !job_is_current(&conn, root_id, job_id)? {
             return Ok(());
         }
+
+        let settings = storage::settings::load_settings(&conn).unwrap_or_default();
+        let provider = settings.embedding_provider;
+        eprintln!(
+            "[index] content batch root_id={} job_id={} batch={} size={} embedding_provider={}",
+            root_id,
+            job_id,
+            batch_index + 1,
+            batch.len(),
+            provider
+        );
 
         let extracted_batch = batch
             .par_iter()
             .map(|candidate| {
                 let path = PathBuf::from(&candidate.path);
-                let output =
-                    extractors::extract_file_text(&path, &candidate.kind, &candidate.extension);
+                let output = extractors::extract_file_text(
+                    &path,
+                    &candidate.kind,
+                    &candidate.extension,
+                    &provider,
+                    Some(model_cache_dir),
+                );
                 (candidate.file_id, output)
             })
             .collect::<Vec<_>>();
@@ -449,7 +479,7 @@ fn run_content_backfill_job(
         let tx = conn.transaction()?;
         for (file_id, output) in extracted_batch {
             storage::replace_file_content(&tx, file_id, &output, unix_timestamp())?;
-            if output.status != "indexed" {
+            if output.status != "indexed" && output.media_segments.is_empty() {
                 storage::replace_semantic_record(
                     &tx,
                     file_id,
@@ -463,8 +493,19 @@ fn run_content_backfill_job(
             }
         }
         tx.commit()?;
+        eprintln!(
+            "[index] content batch committed root_id={} job_id={} batch={} files={}",
+            root_id,
+            job_id,
+            batch_index + 1,
+            batch.len()
+        );
     }
 
+    eprintln!(
+        "[index] content backfill complete root_id={} job_id={}",
+        root_id, job_id
+    );
     drop(conn);
     spawn_semantic_backfill_job(
         db_path.to_path_buf(),
@@ -485,8 +526,22 @@ fn spawn_semantic_backfill_job(
     job_id: i64,
 ) {
     std::thread::spawn(move || {
-        let _ =
-            run_semantic_backfill_job(&db_path, &vector_db_path, &model_cache_dir, root_id, job_id);
+        if let Err(error) =
+            run_semantic_backfill_job(&db_path, &vector_db_path, &model_cache_dir, root_id, job_id)
+        {
+            eprintln!(
+                "[index] semantic backfill aborted root_id={} job_id={} error={}",
+                root_id, job_id, error
+            );
+            if let Ok(conn) = storage::open_connection(&db_path) {
+                let _ = storage::set_root_last_error(
+                    &conn,
+                    root_id,
+                    Some(&error.to_string()),
+                    unix_timestamp(),
+                );
+            }
+        }
     });
 }
 
@@ -503,32 +558,171 @@ fn run_semantic_backfill_job(
     }
 
     let candidates = storage::fetch_semantic_backfill_candidates(&conn, root_id)?;
+    eprintln!(
+        "[index] semantic backfill start root_id={} job_id={} candidates={}",
+        root_id,
+        job_id,
+        candidates.len()
+    );
     if candidates.is_empty() {
+        eprintln!(
+            "[index] semantic backfill no candidates root_id={} job_id={}",
+            root_id, job_id
+        );
         return Ok(());
     }
 
-    let items = candidates
-        .iter()
-        .filter_map(semantic::build_index_item)
-        .collect::<Vec<_>>();
+    let settings = storage::settings::load_settings(&conn).unwrap_or_default();
+    let provider = settings.embedding_provider;
+    let api_key = settings.gemini_api_key;
+
+    let mut unsupported_ids = Vec::new();
+    let mut file_items = Vec::new();
+    for candidate in &candidates {
+        let plan = semantic::prepare_semantic_plan(&candidate.kind, &provider);
+        if plan.status == "unsupported" {
+            unsupported_ids.push(candidate.file_id);
+            continue;
+        }
+
+        if let Some(item) = semantic::build_index_item(candidate) {
+            file_items.push(item);
+        }
+    }
+    let unsupported_count = unsupported_ids.len();
+
+    if !unsupported_ids.is_empty() {
+        let tx = conn.transaction()?;
+        let indexed_at = unix_timestamp();
+        for file_id in unsupported_ids {
+            storage::replace_semantic_record(
+                &tx,
+                file_id,
+                "unsupported",
+                None,
+                None,
+                None,
+                indexed_at,
+                None,
+            )?;
+        }
+        tx.commit()?;
+    }
+
+    let media_items = if provider == "gemini" {
+        let mut sources = storage::fetch_semantic_media_sources(&conn, root_id, "audio")?;
+        sources.extend(storage::fetch_semantic_media_sources(
+            &conn, root_id, "video",
+        )?);
+        let mut grouped_sources = HashMap::<i64, Vec<_>>::new();
+        for source in sources {
+            grouped_sources
+                .entry(source.file_id)
+                .or_default()
+                .push(source);
+        }
+
+        let total_media_files = grouped_sources.len();
+        let total_media_segments = grouped_sources.values().map(Vec::len).sum::<usize>();
+        eprintln!(
+            "[index] semantic media prep start root_id={} job_id={} files={} segments={}",
+            root_id, job_id, total_media_files, total_media_segments
+        );
+
+        let mut prepared_items = Vec::new();
+        let mut failed_media_files = Vec::<(i64, String, String)>::new();
+        for (file_position, mut file_sources) in grouped_sources.into_values().enumerate() {
+            file_sources.sort_by_key(|source| source.segment_index);
+            let first = &file_sources[0];
+            eprintln!(
+                "[index] semantic media prep file root_id={} job_id={} progress={}/{} modality={} segments={} path={}",
+                root_id,
+                job_id,
+                file_position + 1,
+                total_media_files,
+                first.modality,
+                file_sources.len(),
+                first.path
+            );
+            match semantic::build_media_index_items(&file_sources) {
+                Ok(mut items) => {
+                    eprintln!(
+                        "[index] semantic media prep ready root_id={} job_id={} file_id={} items={}",
+                        root_id,
+                        job_id,
+                        first.file_id,
+                        items.len()
+                    );
+                    prepared_items.append(&mut items);
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[index] semantic media prep failed root_id={} job_id={} file_id={} modality={} error={}",
+                        root_id,
+                        job_id,
+                        first.file_id,
+                        first.modality,
+                        error
+                    );
+                    failed_media_files.push((
+                        first.file_id,
+                        first.modality.clone(),
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+        persist_semantic_media_prep_failures(
+            &mut conn,
+            root_id,
+            provider.as_str(),
+            &failed_media_files,
+        )?;
+        eprintln!(
+            "[index] semantic media prep complete root_id={} job_id={} items={} failed_files={}",
+            root_id,
+            job_id,
+            prepared_items.len(),
+            failed_media_files.len()
+        );
+        prepared_items
+    } else {
+        Vec::new()
+    };
+    let mut items = file_items;
+    items.extend(media_items);
     if items.is_empty() {
+        eprintln!(
+            "[index] semantic backfill nothing to index root_id={} job_id={}",
+            root_id, job_id
+        );
         return Ok(());
     }
 
     let mut text_items = Vec::new();
     let mut image_items = Vec::new();
+    let mut media_items = Vec::new();
 
     for item in items {
         match item.modality.as_str() {
             "text" => text_items.push(item),
             "image" => image_items.push(item),
+            "audio" | "video" => media_items.push(item),
             _ => {}
         }
     }
+    eprintln!(
+        "[index] semantic backfill queued root_id={} job_id={} text_items={} image_items={} media_items={} unsupported={}",
+        root_id,
+        job_id,
+        text_items.len(),
+        image_items.len(),
+        media_items.len(),
+        unsupported_count
+    );
 
-    let settings = storage::settings::load_settings(&conn).unwrap_or_default();
-    let provider = settings.embedding_provider.as_str();
-    let api_key = settings.gemini_api_key.as_deref();
+    let provider = provider.as_str();
+    let api_key = api_key.as_deref();
 
     let mut handle = semantic::open_index_handle(vector_db_path)?;
     process_semantic_items(
@@ -553,7 +747,53 @@ fn run_semantic_backfill_job(
         provider,
         api_key,
     )?;
+    process_semantic_items(
+        &mut conn,
+        &mut handle,
+        model_cache_dir,
+        root_id,
+        job_id,
+        &media_items,
+        semantic::SEMANTIC_MEDIA_BATCH_SIZE,
+        provider,
+        api_key,
+    )?;
+    storage::set_root_last_error(&conn, root_id, None, unix_timestamp())?;
+    eprintln!(
+        "[index] semantic backfill complete root_id={} job_id={}",
+        root_id, job_id
+    );
 
+    Ok(())
+}
+
+fn persist_semantic_media_prep_failures(
+    conn: &mut rusqlite::Connection,
+    root_id: i64,
+    provider: &str,
+    failures: &[(i64, String, String)],
+) -> Result<()> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+
+    let indexed_at = unix_timestamp();
+    let tx = conn.transaction()?;
+    for (file_id, modality, error_message) in failures {
+        storage::replace_semantic_record(
+            &tx,
+            *file_id,
+            "error",
+            Some(modality.as_str()),
+            Some(semantic::semantic_model_name(provider)),
+            None,
+            indexed_at,
+            Some(error_message.as_str()),
+        )?;
+    }
+    tx.commit()?;
+
+    storage::set_root_last_error(conn, root_id, Some(&failures[0].2), indexed_at)?;
     Ok(())
 }
 
@@ -568,15 +808,36 @@ fn process_semantic_items(
     provider: &str,
     api_key: Option<&str>,
 ) -> Result<()> {
-    for batch in items.chunks(batch_size.max(1)) {
+    if items.is_empty() {
+        eprintln!(
+            "[index] semantic modality skip root_id={} job_id={} provider={} items=0",
+            root_id, job_id, provider
+        );
+        return Ok(());
+    }
+
+    for (batch_index, batch) in items.chunks(batch_size.max(1)).enumerate() {
         if !job_is_current(conn, root_id, job_id)? {
             return Ok(());
         }
+        let modality = batch
+            .first()
+            .map(|item| item.modality.as_str())
+            .unwrap_or("unknown");
+        eprintln!(
+            "[index] semantic batch start root_id={} job_id={} modality={} batch={} size={}",
+            root_id,
+            job_id,
+            modality,
+            batch_index + 1,
+            batch.len()
+        );
 
         match semantic::index_batch_with_handle(handle, model_cache_dir, batch, provider, api_key) {
             Ok(records) => {
                 let tx = conn.transaction()?;
                 let indexed_at = unix_timestamp();
+                let record_count = records.len();
                 for record in records {
                     storage::replace_semantic_record(
                         &tx,
@@ -590,8 +851,24 @@ fn process_semantic_items(
                     )?;
                 }
                 tx.commit()?;
+                eprintln!(
+                    "[index] semantic batch committed root_id={} job_id={} modality={} batch={} records={}",
+                    root_id,
+                    job_id,
+                    modality,
+                    batch_index + 1,
+                    record_count
+                );
             }
             Err(error) => {
+                eprintln!(
+                    "[index] semantic batch failed root_id={} job_id={} modality={} batch={} error={}",
+                    root_id,
+                    job_id,
+                    modality,
+                    batch_index + 1,
+                    error
+                );
                 let tx = conn.transaction()?;
                 let indexed_at = unix_timestamp();
                 for item in batch {
@@ -607,6 +884,7 @@ fn process_semantic_items(
                     )?;
                 }
                 tx.commit()?;
+                storage::set_root_last_error(conn, root_id, Some(&error.to_string()), indexed_at)?;
                 return Ok(());
             }
         }
@@ -621,7 +899,7 @@ fn job_is_current(conn: &rusqlite::Connection, root_id: i64, job_id: i64) -> Res
         .unwrap_or(false))
 }
 
-fn prepare_file(path: &Path) -> PreparedFile {
+fn prepare_file(path: &Path, provider: &str) -> PreparedFile {
     let indexed_at = unix_timestamp();
     let extension = path
         .extension()
@@ -643,12 +921,12 @@ fn prepare_file(path: &Path) -> PreparedFile {
         indexed_at,
         size,
         modified_at,
-        content: extractors::placeholder_output(&kind, &extension),
-        semantic_plan: semantic::prepare_semantic_plan(&kind),
+        content: extractors::placeholder_output(&kind, &extension, provider),
+        semantic_plan: semantic::prepare_semantic_plan(&kind, provider),
     }
 }
 
-fn prepare_incremental_file(path: &Path) -> PreparedFile {
+fn prepare_incremental_file(path: &Path, provider: &str, model_cache_dir: &Path) -> PreparedFile {
     let indexed_at = unix_timestamp();
     let extension = path
         .extension()
@@ -663,7 +941,8 @@ fn prepare_incremental_file(path: &Path) -> PreparedFile {
     let modified_at = metadata
         .and_then(|metadata| metadata.modified().ok())
         .map(crate::utils::system_time_to_timestamp);
-    let content = extractors::extract_file_text(path, &kind, &extension);
+    let content =
+        extractors::extract_file_text(path, &kind, &extension, provider, Some(model_cache_dir));
 
     PreparedFile {
         path: path.to_path_buf(),
@@ -672,7 +951,7 @@ fn prepare_incremental_file(path: &Path) -> PreparedFile {
         size,
         modified_at,
         content,
-        semantic_plan: semantic::prepare_semantic_plan(&kind),
+        semantic_plan: semantic::prepare_semantic_plan(&kind, provider),
     }
 }
 

@@ -91,6 +91,7 @@ function ResultListRowComponent({
 
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.72rem] uppercase tracking-[0.12em] text-[#7b8186]">
           <span>{result.modifiedAt ? formatRelativeDate(result.modifiedAt) : "Recently indexed"}</span>
+          {result.snippetSource ? <span>{result.snippetSource}</span> : null}
         </div>
       </div>
     </button>
@@ -159,6 +160,11 @@ function ResultGridCardComponent({
               {kindLabel(result.kind)} •{" "}
               {result.modifiedAt ? formatRelativeDate(result.modifiedAt) : "Recently indexed"}
             </p>
+            {result.snippetSource ? (
+              <p className="mt-1 text-[0.68rem] uppercase tracking-[0.12em] text-[#8b9095]">
+                {result.snippetSource}
+              </p>
+            ) : null}
             <HighlightedSnippet
               className="mt-2 line-clamp-3 text-sm leading-6 text-[#666d6a]"
               text={result.snippet ?? result.path}
@@ -218,7 +224,7 @@ function ResultGridPreview({ result, query }: { result: SearchResult; query: str
     return (
       <div className="h-28 rounded-[18px] border border-black/5 bg-[#fbfaf7] p-3">
         <p className="text-[0.64rem] uppercase tracking-[0.14em] text-[#7c8187]">
-          Content preview
+          {result.snippetSource ? `Content preview • ${result.snippetSource}` : "Content preview"}
         </p>
         <HighlightedSnippet
           className="mt-2 line-clamp-4 text-sm leading-5 text-[#555d59]"
@@ -270,13 +276,20 @@ export interface ScoreBreakdownCardProps {
 export function ScoreBreakdownCard({ result, queryIntent }: ScoreBreakdownCardProps) {
   const b = result.scoreBreakdown;
   const total =
-    b.metadata + b.lexical + b.semanticText + b.semanticImage + b.intent + b.recency;
+    b.metadata +
+    b.lexical +
+    b.semanticText +
+    b.semanticImage +
+    b.semanticMedia +
+    b.intent +
+    b.recency;
 
   const bars: { label: string; value: number; color: string }[] = [
     { label: "Filename", value: b.metadata, color: "#8b7ec8" },
     { label: "Contents", value: b.lexical, color: "#5a8fbf" },
     { label: "Text match", value: b.semanticText, color: "#4ea87b" },
     { label: "Image match", value: b.semanticImage, color: "#c78b4e" },
+    { label: "Media match", value: b.semanticMedia, color: "#5d8ec9" },
     { label: "Intent", value: b.intent, color: "#d06f8d" },
     { label: "Recency", value: b.recency, color: "#9a9aaa" },
   ];
@@ -359,7 +372,7 @@ function formatQueryIntent(queryIntent: SearchQueryIntent) {
     case "too_short":
       return "Type at least 3 characters or 2 words.";
     case "missing_key":
-      return "No Gemini API key configured.";
+      return "Intent classifier unavailable without a Gemini key.";
     case "error":
       return "Classification failed.";
     default:

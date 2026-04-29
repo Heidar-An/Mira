@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_PROVIDER: &str = "local";
 const DEFAULT_REFRESH_MINUTES: i64 = 0;
+const SEMANTIC_SCHEMA_VERSION_KEY: &str = "semantic_schema_version";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +14,7 @@ pub struct AppSettings {
     pub index_refresh_minutes: i64,
     pub embedding_model_version: Option<String>,
     pub show_score_breakdown: bool,
+    pub ignore_metadata: bool,
 }
 
 impl Default for AppSettings {
@@ -23,6 +25,7 @@ impl Default for AppSettings {
             index_refresh_minutes: DEFAULT_REFRESH_MINUTES,
             embedding_model_version: None,
             show_score_breakdown: false,
+            ignore_metadata: false,
         }
     }
 }
@@ -48,6 +51,9 @@ pub fn load_settings(conn: &Connection) -> Result<AppSettings> {
             "embedding_model_version" => settings.embedding_model_version = Some(value),
             "show_score_breakdown" => {
                 settings.show_score_breakdown = value == "true" || value == "1";
+            }
+            "ignore_metadata" => {
+                settings.ignore_metadata = value == "true" || value == "1";
             }
             _ => {}
         }
@@ -75,6 +81,10 @@ pub fn save_settings(conn: &Connection, settings: &AppSettings) -> Result<()> {
             "show_score_breakdown",
             Some(settings.show_score_breakdown.to_string()),
         ),
+        (
+            "ignore_metadata",
+            Some(settings.ignore_metadata.to_string()),
+        ),
     ];
 
     for (key, value) in pairs {
@@ -101,4 +111,27 @@ pub fn reset_all_semantic_status(conn: &Connection) -> Result<usize> {
         [],
     )?;
     Ok(count)
+}
+
+pub fn load_semantic_schema_version(conn: &Connection) -> Result<Option<String>> {
+    let value = conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![SEMANTIC_SCHEMA_VERSION_KEY],
+        |row| row.get(0),
+    );
+
+    match value {
+        Ok(version) => Ok(Some(version)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub fn save_semantic_schema_version(conn: &Connection, version: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![SEMANTIC_SCHEMA_VERSION_KEY, version],
+    )?;
+    Ok(())
 }

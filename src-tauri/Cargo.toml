@@ -40,3 +40,5 @@ tauri-plugin-opener = "2"
 walkdir = "2"
 zip = "2"
 image = "0.25.10"
+symphonia = { version = "0.5.5", features = ["all"] }
+hound = "3.5.1"

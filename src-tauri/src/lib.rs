@@ -2,6 +2,7 @@ mod commands;
 mod extractors;
 mod gemini;
 mod indexing;
+mod media;
 mod models;
 mod preview;
 mod search;

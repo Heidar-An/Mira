@@ -12,7 +12,7 @@ export const SUGGESTIONS = [
   "typescript config",
 ];
 
-export const FILE_TYPE_FILTERS = ["document", "image", "text", "code", "other"] as const;
+export const FILE_TYPE_FILTERS = ["document", "image", "text", "code", "audio", "video", "other"] as const;
 
 export const PAGE_SIZE = 10;
 

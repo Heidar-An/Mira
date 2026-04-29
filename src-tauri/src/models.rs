@@ -25,6 +25,7 @@ pub struct ScoreBreakdown {
     pub lexical: i64,
     pub semantic_text: i64,
     pub semantic_image: i64,
+    pub semantic_media: i64,
     pub intent: i64,
     pub recency: i64,
     pub total: i64,
@@ -48,6 +49,10 @@ pub struct SearchResult {
     pub match_reasons: Vec<String>,
     pub snippet: Option<String>,
     pub snippet_source: Option<String>,
+    pub segment_modality: Option<String>,
+    pub segment_label: Option<String>,
+    pub segment_start_ms: Option<i64>,
+    pub segment_end_ms: Option<i64>,
     pub preview_path: Option<String>,
 }
 
@@ -68,6 +73,10 @@ pub struct FileDetails {
     pub content_status: Option<String>,
     pub content_snippet: Option<String>,
     pub content_source: Option<String>,
+    pub segment_modality: Option<String>,
+    pub segment_label: Option<String>,
+    pub segment_start_ms: Option<i64>,
+    pub segment_end_ms: Option<i64>,
     pub extraction_error: Option<String>,
     pub semantic_status: Option<String>,
     pub semantic_modality: Option<String>,
@@ -158,6 +167,10 @@ pub struct ContentMatch {
     pub indexed_at: i64,
     pub source_label: Option<String>,
     pub text: String,
+    pub segment_modality: Option<String>,
+    pub segment_label: Option<String>,
+    pub segment_start_ms: Option<i64>,
+    pub segment_end_ms: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -165,6 +178,10 @@ pub struct FileContentPreview {
     pub content_status: Option<String>,
     pub content_snippet: Option<String>,
     pub content_source: Option<String>,
+    pub segment_modality: Option<String>,
+    pub segment_label: Option<String>,
+    pub segment_start_ms: Option<i64>,
+    pub segment_end_ms: Option<i64>,
     pub extraction_error: Option<String>,
 }
 
@@ -182,6 +199,10 @@ pub struct SemanticMatch {
     pub file_id: i64,
     pub modality: String,
     pub similarity: f32,
+    pub summary: Option<String>,
+    pub segment_label: Option<String>,
+    pub segment_start_ms: Option<i64>,
+    pub segment_end_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +213,19 @@ pub struct SemanticSourceFile {
     pub kind: String,
     pub summary: Option<String>,
     pub content_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticMediaSource {
+    pub file_id: i64,
+    pub root_id: i64,
+    pub path: String,
+    pub kind: String,
+    pub segment_index: i64,
+    pub modality: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub label: String,
 }
 
 #[derive(Debug, Clone)]

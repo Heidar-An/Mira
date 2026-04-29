@@ -80,12 +80,21 @@ pub fn fetch_semantic_backfill_candidates(
                 f.root_id,
                 f.path,
                 f.kind,
-                (
-                    SELECT c.source_label
-                    FROM file_text_chunks c
-                    WHERE c.file_id = f.id
-                    ORDER BY CAST(c.chunk_index AS INTEGER) ASC
-                    LIMIT 1
+                COALESCE(
+                    (
+                        SELECT c.source_label
+                        FROM file_text_chunks c
+                        WHERE c.file_id = f.id
+                        ORDER BY CAST(c.chunk_index AS INTEGER) ASC
+                        LIMIT 1
+                    ),
+                    (
+                        SELECT m.label
+                        FROM media_segments m
+                        WHERE m.file_id = f.id
+                        ORDER BY m.segment_index ASC
+                        LIMIT 1
+                    )
                 ) AS summary,
                 (
                     SELECT group_concat(text, ' ')
@@ -100,7 +109,6 @@ pub fn fetch_semantic_backfill_candidates(
          FROM files f
          LEFT JOIN file_semantic_index s ON s.file_id = f.id
          WHERE f.root_id = ?1
-           AND f.kind IN ('image', 'document', 'text', 'code')
            AND (s.status IS NULL OR s.status = 'pending')
          ORDER BY f.id ASC",
     )?;

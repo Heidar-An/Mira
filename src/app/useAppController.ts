@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   indexRefreshMinutes: 0,
   embeddingModelVersion: null,
   showScoreBreakdown: false,
+  ignoreMetadata: false,
 };
 
 export function useAppController(): AppController {

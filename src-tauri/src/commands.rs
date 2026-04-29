@@ -93,6 +93,8 @@ pub async fn search_files(
 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = storage::open_connection(&db_path)?;
+        let settings = storage::settings::load_settings(&conn).unwrap_or_default();
+        let ignore_metadata = settings.ignore_metadata;
         crate::search::search_files(
             &conn,
             &vector_db_path,
@@ -103,6 +105,7 @@ pub async fn search_files(
             mode,
             limit,
             offset,
+            ignore_metadata,
         )
     })
     .await
@@ -166,11 +169,26 @@ pub fn save_settings(
             let _ = semantic::drop_embeddings_table(&state.vector_db_path);
         }));
         let _ = storage::settings::reset_all_semantic_status(&conn);
+        let _ = storage::sync_media_content_status(&conn, unix_timestamp());
+        let _ = storage::settings::save_semantic_schema_version(
+            &conn,
+            semantic::SEMANTIC_SCHEMA_VERSION,
+        );
     }
 
     let refresh_changed = old.index_refresh_minutes != to_save.index_refresh_minutes;
     if refresh_changed {
         state.update_refresh_interval(to_save.index_refresh_minutes);
+    }
+
+    let roots = if provider_changed {
+        storage::fetch_roots(&conn).map_err(err_to_string)?
+    } else {
+        Vec::new()
+    };
+    drop(conn);
+    for root in roots {
+        let _ = commands_start_index(root.id, &state);
     }
 
     Ok(saved)
@@ -188,6 +206,11 @@ pub fn rebuild_all_embeddings(state: State<'_, AppState>) -> Result<(), String> 
         let _ = semantic::drop_embeddings_table(&state.vector_db_path);
     }));
     storage::settings::reset_all_semantic_status(&conn).map_err(err_to_string)?;
+    let settings = storage::settings::load_settings(&conn).map_err(err_to_string)?;
+    let _ = settings;
+    storage::sync_media_content_status(&conn, unix_timestamp()).map_err(err_to_string)?;
+    storage::settings::save_semantic_schema_version(&conn, semantic::SEMANTIC_SCHEMA_VERSION)
+        .map_err(err_to_string)?;
     let roots = storage::fetch_roots(&conn).map_err(err_to_string)?;
     drop(conn);
     for root in roots {

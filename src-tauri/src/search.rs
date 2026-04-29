@@ -1,9 +1,8 @@
 use crate::{
     gemini::{self, QueryKindIntent},
     models::{
-        ContentMatch, FileCandidate, ScoreBreakdown, SearchMode, SearchQueryIntent,
-        SearchResponse, SearchResult,
-        SemanticMatch,
+        ContentMatch, FileCandidate, ScoreBreakdown, SearchMode, SearchQueryIntent, SearchResponse,
+        SearchResult, SemanticMatch,
     },
     preview::preview_path_for_kind,
     semantic, storage,
@@ -26,14 +25,20 @@ pub fn search_files(
     mode: SearchMode,
     limit: usize,
     offset: usize,
+    ignore_metadata: bool,
 ) -> Result<SearchResponse> {
     let effective_limit = offset + limit + 1;
     let expanded_kinds = expand_kind_filters(kinds);
-    let metadata_candidates =
-        storage::fetch_candidates(conn, query, root_ids, expanded_kinds.as_deref(), effective_limit)?;
 
     if query.is_empty() {
-        let all: Vec<SearchResult> = metadata_candidates
+        let recent_candidates = storage::fetch_candidates(
+            conn,
+            query,
+            root_ids,
+            expanded_kinds.as_deref(),
+            effective_limit,
+        )?;
+        let all: Vec<SearchResult> = recent_candidates
             .into_iter()
             .take(effective_limit)
             .map(|candidate| {
@@ -55,6 +60,10 @@ pub fn search_files(
                     match_reasons: vec!["recent file".to_string()],
                     snippet: None,
                     snippet_source: None,
+                    segment_modality: None,
+                    segment_label: None,
+                    segment_start_ms: None,
+                    segment_end_ms: None,
                     preview_path,
                 }
             })
@@ -77,9 +86,18 @@ pub fn search_files(
 
     let mut combined = HashMap::<i64, SearchResult>::new();
 
-    for candidate in metadata_candidates {
-        let scored = score_candidate(candidate, query, &tokens);
-        combined.insert(scored.file_id, scored);
+    if !ignore_metadata {
+        let metadata_candidates = storage::fetch_candidates(
+            conn,
+            query,
+            root_ids,
+            expanded_kinds.as_deref(),
+            effective_limit,
+        )?;
+        for candidate in metadata_candidates {
+            let scored = score_candidate(candidate, query, &tokens);
+            combined.insert(scored.file_id, scored);
+        }
     }
 
     if let Some(fts_query) = build_fts_query(&tokens) {
@@ -318,7 +336,8 @@ fn score_candidate(candidate: FileCandidate, query: &str, tokens: &[String]) -> 
         reasons.dedup();
     }
 
-    let preview_path = preview_path_for_kind(&candidate.path, &candidate.kind, &candidate.extension);
+    let preview_path =
+        preview_path_for_kind(&candidate.path, &candidate.kind, &candidate.extension);
 
     SearchResult {
         file_id: candidate.file_id,
@@ -336,6 +355,10 @@ fn score_candidate(candidate: FileCandidate, query: &str, tokens: &[String]) -> 
         match_reasons: reasons,
         snippet: None,
         snippet_source: None,
+        segment_modality: None,
+        segment_label: None,
+        segment_start_ms: None,
+        segment_end_ms: None,
         preview_path,
     }
 }
@@ -375,6 +398,10 @@ fn merge_content_match(
             match_reasons: Vec::new(),
             snippet: None,
             snippet_source: None,
+            segment_modality: None,
+            segment_label: None,
+            segment_start_ms: None,
+            segment_end_ms: None,
             preview_path,
         }
     });
@@ -387,6 +414,10 @@ fn merge_content_match(
     if entry.snippet.is_none() {
         entry.snippet = snippet;
         entry.snippet_source = content_match.source_label;
+        entry.segment_modality = content_match.segment_modality;
+        entry.segment_label = content_match.segment_label;
+        entry.segment_start_ms = content_match.segment_start_ms;
+        entry.segment_end_ms = content_match.segment_end_ms;
     }
 
     entry.match_reasons.sort();
@@ -400,10 +431,10 @@ fn merge_semantic_match(
     rank: usize,
 ) {
     let modality = semantic_match.modality.clone();
-    let reason = if modality == "image" {
-        "visual match"
-    } else {
-        "semantic match"
+    let reason = match modality.as_str() {
+        "image" => "visual match",
+        "audio" | "video" => "media match",
+        _ => "semantic match",
     };
     let semantic_score =
         (semantic_match.similarity * 240.0).round() as i64 - (rank as i64 * 4).min(40);
@@ -419,8 +450,11 @@ fn merge_semantic_match(
                 Some(candidate) => {
                     let recency =
                         recency_boost(candidate.modified_at.or(Some(candidate.indexed_at)));
-                    let preview_path =
-                        preview_path_for_kind(&candidate.path, &candidate.kind, &candidate.extension);
+                    let preview_path = preview_path_for_kind(
+                        &candidate.path,
+                        &candidate.kind,
+                        &candidate.extension,
+                    );
                     SearchResult {
                         file_id: candidate.file_id,
                         root_id: candidate.root_id,
@@ -440,6 +474,10 @@ fn merge_semantic_match(
                         match_reasons: Vec::new(),
                         snippet: None,
                         snippet_source: None,
+                        segment_modality: None,
+                        segment_label: None,
+                        segment_start_ms: None,
+                        segment_end_ms: None,
                         preview_path,
                     }
                 }
@@ -448,6 +486,8 @@ fn merge_semantic_match(
 
     if modality == "image" {
         entry.score_breakdown.semantic_image += semantic_score.max(60);
+    } else if matches!(modality.as_str(), "audio" | "video") {
+        entry.score_breakdown.semantic_media += semantic_score.max(60);
     } else {
         entry.score_breakdown.semantic_text += semantic_score.max(60);
     }
@@ -460,6 +500,16 @@ fn merge_semantic_match(
             .unwrap_or(semantic_match.similarity),
     );
     entry.match_reasons.push(reason.to_string());
+    if matches!(modality.as_str(), "audio" | "video") {
+        if entry.snippet.is_none() {
+            entry.snippet = semantic_match.summary.clone();
+            entry.snippet_source = semantic_match.segment_label.clone();
+        }
+        entry.segment_modality = Some(modality.clone());
+        entry.segment_label = semantic_match.segment_label.clone();
+        entry.segment_start_ms = semantic_match.segment_start_ms;
+        entry.segment_end_ms = semantic_match.segment_end_ms;
+    }
 
     entry.match_reasons.sort();
     entry.match_reasons.dedup();
@@ -509,7 +559,7 @@ fn apply_query_kind_intent(results: &mut [SearchResult], intent: &QueryKindInten
 }
 
 fn kind_intent_factor(intent: &QueryKindIntent, result_kind: &str) -> f32 {
-    let result_filter_kind = filter_kind_for_result(result_kind);
+    let result_filter_kind = intent_kind_for_result(result_kind);
     let confidence = intent.confidence as f32 / 100.0;
     let strength = 0.08 + (confidence * 0.2);
 
@@ -535,6 +585,8 @@ fn is_related_kind(intent_kind: &str, result_kind: &str) -> bool {
             | ("text", "document")
             | ("text", "code")
             | ("code", "text")
+            | ("audio", "video")
+            | ("video", "audio")
     )
 }
 
@@ -547,12 +599,7 @@ fn expand_kind_filters(kinds: Option<&[String]>) -> Option<Vec<String>> {
     let mut expanded = Vec::new();
     for kind in kinds {
         match kind.as_str() {
-            "other" => expanded.extend([
-                "other".to_string(),
-                "archive".to_string(),
-                "audio".to_string(),
-                "video".to_string(),
-            ]),
+            "other" => expanded.extend(["other".to_string(), "archive".to_string()]),
             _ => expanded.push(kind.clone()),
         }
     }
@@ -568,6 +615,20 @@ fn filter_kind_for_result(kind: &str) -> &'static str {
         "image" => "image",
         "text" => "text",
         "code" => "code",
+        "audio" => "audio",
+        "video" => "video",
+        _ => "other",
+    }
+}
+
+fn intent_kind_for_result(kind: &str) -> &'static str {
+    match kind {
+        "document" => "document",
+        "image" => "image",
+        "text" => "text",
+        "code" => "code",
+        "audio" => "audio",
+        "video" => "video",
         _ => "other",
     }
 }
@@ -594,6 +655,7 @@ fn total_score(breakdown: &ScoreBreakdown) -> i64 {
         + breakdown.lexical
         + breakdown.semantic_text
         + breakdown.semantic_image
+        + breakdown.semantic_media
         + breakdown.intent
         + breakdown.recency
 }
@@ -656,4 +718,87 @@ fn build_snippet(text: &str, tokens: &[String]) -> Option<String> {
     }
 
     Some(snippet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_audio_semantic_match_when_merging_then_result_keeps_best_segment_context() {
+        let mut combined = HashMap::new();
+        merge_semantic_match(
+            &mut combined,
+            SemanticMatch {
+                file_id: 7,
+                modality: "audio".to_string(),
+                similarity: 0.91,
+                summary: Some("Interview about distributed systems".to_string()),
+                segment_label: Some("00:00-01:30".to_string()),
+                segment_start_ms: Some(0),
+                segment_end_ms: Some(90_000),
+            },
+            Some(FileCandidate {
+                file_id: 7,
+                root_id: 3,
+                name: "episode.mp3".to_string(),
+                path: "/tmp/episode.mp3".to_string(),
+                extension: "mp3".to_string(),
+                kind: "audio".to_string(),
+                size: 10,
+                modified_at: Some(unix_timestamp()),
+                indexed_at: unix_timestamp(),
+            }),
+            0,
+        );
+
+        let result = combined.get(&7).expect("result");
+        assert_eq!(
+            result.snippet.as_deref(),
+            Some("Interview about distributed systems")
+        );
+        assert_eq!(result.snippet_source.as_deref(), Some("00:00-01:30"));
+        assert_eq!(result.segment_modality.as_deref(), Some("audio"));
+        assert_eq!(result.segment_start_ms, Some(0));
+        assert_eq!(result.segment_end_ms, Some(90_000));
+        assert!(result.score_breakdown.semantic_media > 0);
+        assert!(result
+            .match_reasons
+            .iter()
+            .any(|reason| reason == "media match"));
+    }
+
+    #[test]
+    fn given_audio_content_match_when_merging_then_timestamp_label_is_preserved() {
+        let mut combined = HashMap::new();
+        merge_content_match(
+            &mut combined,
+            ContentMatch {
+                file_id: 9,
+                root_id: 4,
+                name: "memo.m4a".to_string(),
+                path: "/tmp/memo.m4a".to_string(),
+                extension: "m4a".to_string(),
+                kind: "audio".to_string(),
+                size: 10,
+                modified_at: Some(unix_timestamp()),
+                indexed_at: unix_timestamp(),
+                source_label: Some("02:00-03:30".to_string()),
+                text: "audio segment about release planning".to_string(),
+                segment_modality: Some("audio".to_string()),
+                segment_label: Some("02:00-03:30".to_string()),
+                segment_start_ms: Some(120_000),
+                segment_end_ms: Some(210_000),
+            },
+            &["release".to_string()],
+            0,
+        );
+
+        let result = combined.get(&9).expect("result");
+        assert_eq!(result.snippet_source.as_deref(), Some("02:00-03:30"));
+        assert_eq!(result.segment_modality.as_deref(), Some("audio"));
+        assert_eq!(result.segment_label.as_deref(), Some("02:00-03:30"));
+        assert_eq!(result.segment_start_ms, Some(120_000));
+        assert_eq!(result.segment_end_ms, Some(210_000));
+    }
 }

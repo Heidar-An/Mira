@@ -256,7 +256,7 @@ export function ResultsView({
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-[#6d7470]">
             {activeKinds.length > 0
               ? "Try removing a type filter or switching back to all results."
-              : "You can search by filename, text contents, semantic meaning, and visual similarity."}
+              : "You can search by filename, extracted text, semantic meaning, visual similarity, and media embeddings for audio or video."}
           </p>
           {isRefiningSearch ? <SemanticRefinementBar className="mx-auto mt-6 max-w-2xl" /> : null}
           {message ? <p className="mt-3 text-sm text-[color:var(--danger)]">{message}</p> : null}

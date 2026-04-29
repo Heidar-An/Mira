@@ -62,20 +62,31 @@ impl AppState {
         let settings = storage::settings::load_settings(&conn).unwrap_or_default();
 
         let current_model = crate::semantic::semantic_model_name(&settings.embedding_provider);
-        let needs_rebuild = settings
+        let model_mismatch = settings
             .embedding_model_version
             .as_deref()
             .map(|v| v != current_model)
             .unwrap_or(true);
+        let schema_mismatch = storage::settings::load_semantic_schema_version(&conn)
+            .ok()
+            .flatten()
+            .as_deref()
+            .map(|version| version != crate::semantic::SEMANTIC_SCHEMA_VERSION);
+        let needs_rebuild = semantic_rebuild_needed(model_mismatch, schema_mismatch);
 
         if needs_rebuild {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = crate::semantic::drop_embeddings_table(&state.vector_db_path);
             }));
             let _ = storage::settings::reset_all_semantic_status(&conn);
+            let _ = storage::sync_media_content_status(&conn, crate::utils::unix_timestamp());
             let mut migrated = settings.clone();
             migrated.embedding_model_version = Some(current_model.to_string());
             let _ = storage::settings::save_settings(&conn, &migrated);
+            let _ = storage::settings::save_semantic_schema_version(
+                &conn,
+                crate::semantic::SEMANTIC_SCHEMA_VERSION,
+            );
         }
 
         if settings.index_refresh_minutes > 0 {
@@ -131,11 +142,10 @@ impl AppState {
                             Ok(c) => c,
                             Err(_) => continue,
                         };
-                        let root_path =
-                            match storage::lookup_root_path(&conn, root.id) {
-                                Ok(Some(p)) => p,
-                                _ => continue,
-                            };
+                        let root_path = match storage::lookup_root_path(&conn, root.id) {
+                            Ok(Some(p)) => p,
+                            _ => continue,
+                        };
                         let ts = crate::utils::unix_timestamp();
                         let job_id = match storage::create_index_job(&conn, root.id, ts) {
                             Ok(j) => j,
@@ -161,5 +171,22 @@ impl AppState {
         if let Ok(mut cancel) = self.refresh_cancel.lock() {
             cancel.take();
         }
+    }
+}
+
+fn semantic_rebuild_needed(model_mismatch: bool, schema_mismatch: Option<bool>) -> bool {
+    model_mismatch || schema_mismatch.unwrap_or(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::semantic_rebuild_needed;
+
+    #[test]
+    fn given_schema_version_mismatch_when_checking_rebuild_then_reset_is_required() {
+        assert!(semantic_rebuild_needed(false, Some(true)));
+        assert!(semantic_rebuild_needed(true, Some(false)));
+        assert!(semantic_rebuild_needed(false, None));
+        assert!(!semantic_rebuild_needed(false, Some(false)));
     }
 }

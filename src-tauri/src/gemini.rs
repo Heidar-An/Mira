@@ -1,11 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::Mutex,
-};
+use std::{collections::HashMap, path::Path, sync::Mutex, thread, time::Duration};
 
 use crate::semantic::VECTOR_DIMENSIONS;
 
@@ -18,6 +15,9 @@ const BATCH_EMBED_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:batchEmbedContents";
 const GENERATE_URL_PREFIX: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const MAX_BATCH_SIZE: usize = 100;
+const MAX_RETRY_ATTEMPTS: usize = 4;
+const BASE_BACKOFF_SECS: f64 = 2.0;
+const MAX_BACKOFF_SECS: f64 = 60.0;
 const QUERY_KIND_CACHE_LIMIT: usize = 256;
 
 static QUERY_KIND_CACHE: Lazy<Mutex<HashMap<String, QueryKindIntent>>> =
@@ -38,6 +38,14 @@ pub struct QueryKindIntent {
     pub confidence: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeminiErrorKind {
+    Quota,
+    RateLimited,
+    Temporary,
+    Other,
+}
+
 #[derive(Serialize)]
 struct EmbedRequest {
     content: ContentBody,
@@ -52,12 +60,8 @@ struct ContentBody {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum ContentPart {
-    Text {
-        text: String,
-    },
-    InlineData {
-        inline_data: InlineData,
-    },
+    Text { text: String },
+    InlineData { inline_data: InlineData },
 }
 
 #[derive(Serialize)]
@@ -179,7 +183,7 @@ pub fn classify_query_kind(api_key: &str, query: &str) -> Result<QueryKindIntent
         "properties": {
             "kind": {
                 "type": "string",
-                "enum": ["document", "image", "text", "code", "other"],
+                "enum": ["document", "image", "text", "code", "audio", "video", "other"],
                 "description": "The single best matching result kind for this search query."
             },
             "confidence": {
@@ -200,7 +204,9 @@ Kinds:\n\
 - image: photos, screenshots, graphics, scans, diagrams.\n\
 - text: plain text, markdown, logs, config/data text files.\n\
 - code: source code or developer project files.\n\
-- other: audio, video, archives, or no clear preferred kind.\n\
+- audio: spoken audio, podcasts, interviews, voice notes, songs, or recordings.\n\
+- video: videos or movies when the user is clearly asking for moving image content.\n\
+- other: archives or no clear preferred kind.\n\
 Return 'other' when the query does not clearly imply a preferred kind.\n\
 Query: {normalized}"
     );
@@ -219,41 +225,14 @@ Query: {normalized}"
         }
     });
 
-    let response: GenerateContentResponse = tauri::async_runtime::block_on(async {
-        let url = format!(
-            "{GENERATE_URL_PREFIX}/{GEMINI_QUERY_KIND_MODEL}:generateContent"
-        );
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(&url)
-            .header("x-goog-api-key", api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to call Gemini query intent API")?;
-
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .context("failed to read Gemini query intent response")?;
-
-        if !status.is_success() {
-            let err: ErrorResponse =
-                serde_json::from_str(&text).unwrap_or(ErrorResponse { error: None });
-            let msg = err
-                .error
-                .and_then(|e| e.message)
-                .unwrap_or_else(|| format!("HTTP {status}"));
-            eprintln!(
-                "[intent] classify http_error model={} status={} body={}",
-                GEMINI_QUERY_KIND_MODEL, status, text
-            );
-            return Err(anyhow!("Gemini API error: {msg}"));
-        }
-
-        serde_json::from_str(&text).context("failed to parse Gemini query intent response")
-    })?;
+    let url = format!("{GENERATE_URL_PREFIX}/{GEMINI_QUERY_KIND_MODEL}:generateContent");
+    let response: GenerateContentResponse = serde_json::from_value(post_json_with_retries(
+        &url,
+        &body,
+        Some(("x-goog-api-key", api_key)),
+        "query classification",
+    )?)
+    .context("failed to parse Gemini query intent response")?;
 
     let payload = response
         .candidates
@@ -267,7 +246,7 @@ Query: {normalized}"
         serde_json::from_str(&payload).context("failed to parse Gemini query intent JSON")?;
     if !matches!(
         intent.kind.as_str(),
-        "document" | "image" | "text" | "code" | "other"
+        "document" | "image" | "text" | "code" | "audio" | "video" | "other"
     ) {
         return Err(anyhow!("Gemini returned unsupported query kind"));
     }
@@ -299,30 +278,7 @@ fn embed_single(api_key: &str, text: &str, task: TaskKind) -> Result<Vec<f32>> {
     };
 
     let url = format!("{EMBED_URL}?key={api_key}");
-    let response: serde_json::Value = tauri::async_runtime::block_on(async {
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to call Gemini embedding API")?;
-
-        let status = resp.status();
-        let text = resp.text().await.context("failed to read Gemini response")?;
-
-        if !status.is_success() {
-            let err: ErrorResponse =
-                serde_json::from_str(&text).unwrap_or(ErrorResponse { error: None });
-            let msg = err
-                .error
-                .and_then(|e| e.message)
-                .unwrap_or_else(|| format!("HTTP {status}"));
-            return Err(anyhow!("Gemini API error: {msg}"));
-        }
-
-        serde_json::from_str(&text).context("failed to parse Gemini response")
-    })?;
+    let response = post_json_with_retries(&url, &body, None, "semantic text embeddings")?;
 
     let parsed: EmbedResponse =
         serde_json::from_value(response).context("unexpected Gemini response format")?;
@@ -349,31 +305,7 @@ fn embed_batch(api_key: &str, texts: &[String], task: TaskKind) -> Result<Vec<Ve
     let body = BatchEmbedRequest { requests };
 
     let url = format!("{BATCH_EMBED_URL}?key={api_key}");
-
-    let response: serde_json::Value = tauri::async_runtime::block_on(async {
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to call Gemini batch embedding API")?;
-
-        let status = resp.status();
-        let text = resp.text().await.context("failed to read Gemini response")?;
-
-        if !status.is_success() {
-            let err: ErrorResponse =
-                serde_json::from_str(&text).unwrap_or(ErrorResponse { error: None });
-            let msg = err
-                .error
-                .and_then(|e| e.message)
-                .unwrap_or_else(|| format!("HTTP {status}"));
-            return Err(anyhow!("Gemini batch API error: {msg}"));
-        }
-
-        serde_json::from_str(&text).context("failed to parse Gemini batch response")
-    })?;
+    let response = post_json_with_retries(&url, &body, None, "semantic text embeddings")?;
 
     let parsed: BatchEmbedResponse =
         serde_json::from_value(response).context("unexpected Gemini batch response format")?;
@@ -402,6 +334,40 @@ pub fn embed_images(api_key: &str, paths: &[std::path::PathBuf]) -> Result<Vec<V
     Ok(embeddings)
 }
 
+pub fn embed_media_bytes(
+    api_key: &str,
+    mime_type: &str,
+    bytes: &[u8],
+    modality_label: &str,
+) -> Result<Vec<f32>> {
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+    let body = EmbedRequest {
+        content: ContentBody {
+            parts: vec![ContentPart::InlineData {
+                inline_data: InlineData {
+                    mime_type: mime_type.to_string(),
+                    data: encoded,
+                },
+            }],
+        },
+        output_dimensionality: VECTOR_DIMENSIONS,
+    };
+
+    let url = format!("{EMBED_URL}?key={api_key}");
+    let response = post_json_with_retries(
+        &url,
+        &body,
+        None,
+        &format!("semantic {modality_label} embeddings"),
+    )?;
+    let parsed: EmbedResponse =
+        serde_json::from_value(response).context("unexpected Gemini media response format")?;
+    parsed
+        .embedding
+        .map(|e| e.values)
+        .ok_or_else(|| anyhow!("Gemini returned no media embedding"))
+}
+
 fn embed_single_image(api_key: &str, path: &Path) -> Result<Vec<f32>> {
     let data = std::fs::read(path)
         .with_context(|| format!("failed to read image file: {}", path.display()))?;
@@ -421,30 +387,7 @@ fn embed_single_image(api_key: &str, path: &Path) -> Result<Vec<f32>> {
     };
 
     let url = format!("{EMBED_URL}?key={api_key}");
-    let response: serde_json::Value = tauri::async_runtime::block_on(async {
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to call Gemini image embedding API")?;
-
-        let status = resp.status();
-        let text = resp.text().await.context("failed to read Gemini response")?;
-
-        if !status.is_success() {
-            let err: ErrorResponse =
-                serde_json::from_str(&text).unwrap_or(ErrorResponse { error: None });
-            let msg = err
-                .error
-                .and_then(|e| e.message)
-                .unwrap_or_else(|| format!("HTTP {status}"));
-            return Err(anyhow!("Gemini image API error: {msg}"));
-        }
-
-        serde_json::from_str(&text).context("failed to parse Gemini image response")
-    })?;
+    let response = post_json_with_retries(&url, &body, None, "semantic image embeddings")?;
 
     let parsed: EmbedResponse =
         serde_json::from_value(response).context("unexpected Gemini image response format")?;
@@ -483,5 +426,178 @@ pub fn test_api_key(api_key: &str) -> Result<bool> {
                 Err(e)
             }
         }
+    }
+}
+
+fn post_json_with_retries<T: Serialize>(
+    url: &str,
+    body: &T,
+    header: Option<(&str, &str)>,
+    operation: &str,
+) -> Result<serde_json::Value> {
+    let client = reqwest::Client::new();
+
+    for attempt in 0..=MAX_RETRY_ATTEMPTS {
+        let response = tauri::async_runtime::block_on(async {
+            let mut request = client.post(url).json(body);
+            if let Some((name, value)) = header {
+                request = request.header(name, value);
+            }
+
+            let response = request
+                .send()
+                .await
+                .with_context(|| format!("failed to call Gemini {operation} API"))?;
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .with_context(|| format!("failed to read Gemini {operation} response"))?;
+            Ok::<(StatusCode, String), anyhow::Error>((status, text))
+        });
+
+        let (status, text) = match response {
+            Ok(result) => result,
+            Err(error) => {
+                if attempt < MAX_RETRY_ATTEMPTS {
+                    let delay_secs =
+                        (BASE_BACKOFF_SECS * 2_f64.powi(attempt as i32)).min(MAX_BACKOFF_SECS);
+                    eprintln!(
+                        "[gemini] {} transport retry {}/{} in {:.1}s: {}",
+                        operation,
+                        attempt + 1,
+                        MAX_RETRY_ATTEMPTS + 1,
+                        delay_secs,
+                        error
+                    );
+                    thread::sleep(Duration::from_secs_f64(delay_secs));
+                    continue;
+                }
+
+                return Err(error);
+            }
+        };
+
+        if status.is_success() {
+            return serde_json::from_str(&text)
+                .with_context(|| format!("failed to parse Gemini {operation} response"));
+        }
+
+        let message = extract_api_message(status, &text);
+        let error_kind = classify_error(status, &message, &text);
+        let delay_secs = retry_delay_secs(error_kind, &message, &text, attempt);
+
+        if let Some(delay_secs) = delay_secs {
+            eprintln!(
+                "[gemini] {} retry {}/{} in {:.1}s: {}",
+                operation,
+                attempt + 1,
+                MAX_RETRY_ATTEMPTS + 1,
+                delay_secs,
+                message
+            );
+            thread::sleep(Duration::from_secs_f64(delay_secs));
+            continue;
+        }
+
+        return Err(anyhow!(format_error_message(
+            operation, &message, error_kind
+        )));
+    }
+
+    Err(anyhow!(format_error_message(
+        operation,
+        "Gemini kept asking Mira to retry",
+        GeminiErrorKind::Temporary,
+    )))
+}
+
+fn extract_api_message(status: StatusCode, text: &str) -> String {
+    let err: ErrorResponse = serde_json::from_str(text).unwrap_or(ErrorResponse { error: None });
+    err.error
+        .and_then(|e| e.message)
+        .unwrap_or_else(|| format!("HTTP {status}: {text}"))
+}
+
+fn classify_error(status: StatusCode, message: &str, body: &str) -> GeminiErrorKind {
+    let lowered = format!("{message}\n{body}").to_lowercase();
+
+    if lowered.contains("quota exceeded") || lowered.contains("billing details") {
+        return GeminiErrorKind::Quota;
+    }
+
+    if status == StatusCode::TOO_MANY_REQUESTS
+        || lowered.contains("rate limit")
+        || lowered.contains("resource exhausted")
+        || lowered.contains("retry in ")
+    {
+        return GeminiErrorKind::RateLimited;
+    }
+
+    if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
+        return GeminiErrorKind::Temporary;
+    }
+
+    GeminiErrorKind::Other
+}
+
+fn retry_delay_secs(
+    error_kind: GeminiErrorKind,
+    message: &str,
+    body: &str,
+    attempt: usize,
+) -> Option<f64> {
+    if attempt >= MAX_RETRY_ATTEMPTS {
+        return None;
+    }
+
+    if !matches!(
+        error_kind,
+        GeminiErrorKind::Quota | GeminiErrorKind::RateLimited | GeminiErrorKind::Temporary
+    ) {
+        return None;
+    }
+
+    parse_retry_after_seconds(message)
+        .or_else(|| parse_retry_after_seconds(body))
+        .map(|seconds| seconds.clamp(1.0, MAX_BACKOFF_SECS))
+        .or_else(|| Some((BASE_BACKOFF_SECS * 2_f64.powi(attempt as i32)).min(MAX_BACKOFF_SECS)))
+}
+
+fn parse_retry_after_seconds(input: &str) -> Option<f64> {
+    let lowered = input.to_lowercase();
+
+    for marker in ["retry in ", "retry after "] {
+        let Some(index) = lowered.find(marker) else {
+            continue;
+        };
+        let start = index + marker.len();
+        let remainder = &input[start..];
+        let digits = remainder
+            .chars()
+            .skip_while(|ch| ch.is_whitespace())
+            .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+            .collect::<String>();
+
+        if let Ok(value) = digits.parse::<f64>() {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn format_error_message(operation: &str, message: &str, error_kind: GeminiErrorKind) -> String {
+    match error_kind {
+        GeminiErrorKind::Quota => format!(
+            "Gemini quota exceeded while preparing {operation}. Mira retried several times but is still over quota. Wait a minute, check Gemini rate limits or billing, or switch to Local embeddings in Settings. Original error: {message}"
+        ),
+        GeminiErrorKind::RateLimited => format!(
+            "Gemini rate limited Mira while preparing {operation}. Mira retried with backoff but is still being throttled. Wait a minute and try again, or switch to Local embeddings in Settings. Original error: {message}"
+        ),
+        GeminiErrorKind::Temporary => format!(
+            "Gemini is temporarily unavailable for {operation}. Mira retried with backoff but the service is still unavailable. Original error: {message}"
+        ),
+        GeminiErrorKind::Other => format!("Gemini API error while preparing {operation}: {message}"),
     }
 }

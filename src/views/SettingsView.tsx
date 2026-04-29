@@ -83,7 +83,7 @@ export function SettingsView({
         <h2 className="display-type text-[1.8rem] text-[#202724]">Embedding model</h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6d7470]">
           Choose which model generates vector embeddings for semantic search. Switching models
-          rebuilds the entire vector index.
+          rebuilds the entire vector index, including media embeddings.
         </p>
 
         <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -98,7 +98,7 @@ export function SettingsView({
             selected={draftSettings.embeddingProvider === "gemini"}
             onClick={() => updateLocal({ embeddingProvider: "gemini" })}
             title="Gemini API"
-            description="Uses Google's API for text and image matching. File content needed for embeddings is sent to Google."
+            description="Uses Google's API for text, image, audio, and video embeddings."
             badge="768d"
           />
         </div>
@@ -111,7 +111,8 @@ export function SettingsView({
           <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6d7470]">
             Obtain a key from{" "}
             <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener noreferrer" className="font-medium text-[#4a4e6a]">aistudio.google.com/api-keys</a> and paste it here.
-            Your key is stored locally. When Gemini is selected, Mira sends file content needed for embeddings to Google's API.
+            Your key is stored locally. When Gemini is selected, Mira sends the content needed for
+            text, image, audio, and video embeddings to Google's API.
           </p>  
 
           <div className="mt-5 flex items-center gap-3">
@@ -243,11 +244,40 @@ export function SettingsView({
             </div>
 
             <div className="rounded-[20px] border border-black/5 bg-[#fbfaf7] p-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="display-type text-[1.45rem] text-[#202724]">Ignore filename matching</h3>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6d7470]">
+                    Skip filename and path matching during search. Results will rely only on file
+                    content and semantic similarity.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={cx(
+                    "relative h-8 w-14 rounded-full transition",
+                    draftSettings.ignoreMetadata ? "bg-[#737792]" : "bg-[#d9dce3]",
+                  )}
+                  onClick={() => updateLocal({ ignoreMetadata: !draftSettings.ignoreMetadata })}
+                  aria-pressed={draftSettings.ignoreMetadata}
+                  aria-label="Ignore filename matching"
+                >
+                  <span
+                    className={cx(
+                      "absolute top-1 h-6 w-6 rounded-full bg-white shadow transition",
+                      draftSettings.ignoreMetadata ? "left-7" : "left-1",
+                    )}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-[20px] border border-black/5 bg-[#fbfaf7] p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="display-type text-[1.45rem] text-[#202724]">Search index check</h3>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6d7470]">
-                    Check whether text and image matching data is present.
+                    Check whether text, image, and media matching data is present.
                   </p>
                 </div>
                 <button
@@ -267,10 +297,12 @@ export function SettingsView({
 
               {diag && (
                 <div className="mt-5 space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="grid gap-3 sm:grid-cols-6">
                     <DiagStat label="Total" value={diag.totalVectors} />
                     <DiagStat label="Text" value={diag.textVectors} />
                     <DiagStat label="Images" value={diag.imageVectors} />
+                    <DiagStat label="Audio" value={diag.audioVectors} />
+                    <DiagStat label="Video" value={diag.videoVectors} />
                     <DiagStat label="Other" value={diag.otherVectors} />
                   </div>
 
@@ -286,7 +318,7 @@ export function SettingsView({
             <div className="rounded-[20px] border border-[#e8c4bc]/40 bg-[#fefaf9] p-5">
               <h3 className="display-type text-[1.45rem] text-[#202724]">Rebuild search index</h3>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6d7470]">
-                Re-process every indexed file. This can help after switching providers or when results feel stale.
+                Re-process every indexed file. This refreshes semantic vectors when results feel stale.
               </p>
               <button
                 className="mt-5 inline-flex items-center justify-center gap-2 rounded-[18px] border border-[#d4958a]/30 bg-white px-5 py-3.5 text-sm font-medium text-[#b04a3a] transition hover:-translate-y-0.5 hover:bg-[#fff5f3]"

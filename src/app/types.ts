@@ -19,6 +19,7 @@ export type ScoreBreakdown = {
   lexical: number;
   semanticText: number;
   semanticImage: number;
+  semanticMedia: number;
   intent: number;
   recency: number;
   total: number;
@@ -53,6 +54,10 @@ export type SearchResult = {
   matchReasons: string[];
   snippet: string | null;
   snippetSource: string | null;
+  segmentModality: string | null;
+  segmentLabel: string | null;
+  segmentStartMs: number | null;
+  segmentEndMs: number | null;
   previewPath: string | null;
 };
 
@@ -71,6 +76,10 @@ export type FileDetails = {
   contentStatus: string | null;
   contentSnippet: string | null;
   contentSource: string | null;
+  segmentModality: string | null;
+  segmentLabel: string | null;
+  segmentStartMs: number | null;
+  segmentEndMs: number | null;
   extractionError: string | null;
   semanticStatus: string | null;
   semanticModality: string | null;
@@ -121,6 +130,7 @@ export type AppSettings = {
   indexRefreshMinutes: number;
   embeddingModelVersion: string | null;
   showScoreBreakdown: boolean;
+  ignoreMetadata: boolean;
 };
 
 export type EmbeddingDiagEntry = {
@@ -134,6 +144,8 @@ export type EmbeddingDiagnostics = {
   totalVectors: number;
   textVectors: number;
   imageVectors: number;
+  audioVectors: number;
+  videoVectors: number;
   otherVectors: number;
   sampleEntries: EmbeddingDiagEntry[];
 };
