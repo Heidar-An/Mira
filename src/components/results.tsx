@@ -198,11 +198,33 @@ export const ResultGridCard = memo(ResultGridCardComponent, (previous, next) => 
 
 function ResultGridPreview({ result, query }: { result: SearchResult; query: string }) {
   const previewUrl = result.previewPath ? convertFileSrc(result.previewPath) : null;
+  const videoPreviewUrl =
+    previewUrl && result.kind === "video"
+      ? withVideoFragment(result.segmentStartMs, result.segmentEndMs, previewUrl)
+      : previewUrl;
 
   if (previewUrl && result.kind === "image") {
     return (
       <div className="h-28 overflow-hidden rounded-[18px] bg-[radial-gradient(circle_at_top,rgba(228,231,250,0.45),transparent_55%),#eef0f6]">
         <img src={previewUrl} alt={result.name} className="h-full w-full object-cover" />
+      </div>
+    );
+  }
+
+  if (videoPreviewUrl && result.kind === "video") {
+    return (
+      <div className="relative h-28 overflow-hidden rounded-[18px] bg-[#11141d]">
+        <video
+          src={videoPreviewUrl}
+          title={`${result.name} preview`}
+          className="h-full w-full object-contain"
+          muted
+          autoPlay
+          loop
+          playsInline
+          preload="metadata"
+        />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#11141d] via-[#11141d]/88 to-transparent" />
       </div>
     );
   }
@@ -240,6 +262,22 @@ function ResultGridPreview({ result, query }: { result: SearchResult; query: str
       {iconForKind(result.kind)}
     </div>
   );
+}
+
+function withVideoFragment(
+  startMs: number | null,
+  endMs: number | null,
+  previewUrl: string,
+) {
+  if (startMs == null) {
+    return previewUrl;
+  }
+
+  const startSeconds = Math.max(0, startMs / 1000);
+  const endSeconds = endMs != null ? Math.max(0, endMs / 1000) : null;
+  return endSeconds != null && endSeconds > startSeconds
+    ? `${previewUrl}#t=${startSeconds},${endSeconds}`
+    : `${previewUrl}#t=${startSeconds}`;
 }
 
 export interface PreviewInsightCardProps {

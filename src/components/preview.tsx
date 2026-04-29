@@ -25,6 +25,7 @@ export function SelectedFilePreview({
 }: SelectedFilePreviewProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const previewType = getPreviewType(file, previewUrl);
+  const videoPreviewUrl = previewType === "video" ? withVideoFragment(file, previewUrl) : previewUrl;
   const pdfPage = pageNumberFromSource(file.contentSource);
   const pdfPreviewUrl =
     previewType === "pdf" && previewUrl
@@ -37,11 +38,13 @@ export function SelectedFilePreview({
 
   const dialogContent = previewType === "image"
     ? <ImageDialogContent file={file} previewUrl={previewUrl} />
-    : previewType === "pdf"
-      ? <PdfDialogContent file={file} pdfPreviewUrl={pdfPreviewUrl} pdfPage={pdfPage} />
-      : (file.contentSnippet || file.semanticSummary)
-        ? <DocumentDialogContent file={file} query={query} />
-        : <FallbackDialogContent file={file} />;
+    : previewType === "video"
+      ? <VideoDialogContent file={file} previewUrl={videoPreviewUrl} />
+      : previewType === "pdf"
+        ? <PdfDialogContent file={file} pdfPreviewUrl={pdfPreviewUrl} pdfPage={pdfPage} />
+        : (file.contentSnippet || file.semanticSummary)
+          ? <DocumentDialogContent file={file} query={query} />
+          : <FallbackDialogContent file={file} />;
 
   let inlinePreview: ReactNode;
 
@@ -50,6 +53,17 @@ export function SelectedFilePreview({
       <ImageInlinePreview file={file} previewUrl={previewUrl} className={className}>
         {expandButton}
       </ImageInlinePreview>
+    );
+  } else if (previewType === "video") {
+    inlinePreview = (
+      <VideoInlinePreview
+        file={file}
+        previewUrl={videoPreviewUrl}
+        className={className}
+        subtitle={file.segmentLabel ?? file.contentSource ?? "Video preview"}
+      >
+        {expandButton}
+      </VideoInlinePreview>
     );
   } else if (previewType === "pdf") {
     inlinePreview = (
@@ -115,6 +129,7 @@ export function SelectedFilePreview({
 function getPreviewType(file: FileDetails, previewUrl: string | null) {
   if (!previewUrl) return "none";
   if (file.kind === "image") return "image";
+  if (file.kind === "video") return "video";
   if (file.extension.toLowerCase() === "pdf") return "pdf";
   return "none";
 }
@@ -216,6 +231,48 @@ function PdfInlinePreview({
         {subtitle}
       </div>
 
+      {children}
+    </div>
+  );
+}
+
+function VideoInlinePreview({
+  file,
+  previewUrl,
+  className,
+  subtitle,
+  children,
+}: {
+  file: FileDetails;
+  previewUrl: string | null;
+  className: string;
+  subtitle: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      className={cx(
+        "relative overflow-hidden rounded-[24px] border border-black/5 bg-[radial-gradient(circle_at_top,rgba(228,231,250,0.3),transparent_55%),#11141d]",
+        className,
+      )}
+    >
+      <video
+        src={previewUrl ?? undefined}
+        title={`${file.name} preview`}
+        className="h-full w-full object-contain"
+        muted
+        autoPlay
+        loop
+        playsInline
+        preload="metadata"
+      />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#11141d] via-[#11141d]/88 to-transparent" />
+      <div
+        className="pointer-events-none absolute inset-x-4 bottom-4 truncate rounded-full bg-white/88 px-4 py-2 text-xs uppercase tracking-[0.14em] text-[#5e657f] shadow-[0_10px_24px_rgba(20,20,30,0.08)]"
+        title={subtitle}
+      >
+        {subtitle}
+      </div>
       {children}
     </div>
   );
@@ -424,6 +481,44 @@ function PdfDialogContent({
   );
 }
 
+function VideoDialogContent({
+  file,
+  previewUrl,
+}: {
+  file: FileDetails;
+  previewUrl: string | null;
+}) {
+  return (
+    <>
+      <div className="min-h-0 flex-1 p-4 pt-18 sm:p-6 sm:pt-20">
+        <video
+          src={previewUrl ?? undefined}
+          title={file.name}
+          className="h-full w-full rounded-[26px] bg-[#11141d]"
+          controls
+          autoPlay
+          playsInline
+          preload="metadata"
+        />
+      </div>
+
+      <div className="border-t border-black/5 bg-white/84 px-4 py-3 backdrop-blur sm:px-6">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-[#202724]">{file.name}</p>
+            <p
+              className="truncate text-[0.72rem] uppercase tracking-[0.14em] text-[#7c8187]"
+              title={file.segmentLabel ?? file.contentSource ?? "Video preview"}
+            >
+              {file.segmentLabel ?? file.contentSource ?? "Video preview"}
+            </p>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Dialog content: Document / text snippet
 // ---------------------------------------------------------------------------
@@ -494,4 +589,21 @@ function FallbackDialogContent({ file }: { file: FileDetails }) {
 
 function clampZoom(value: number) {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(value.toFixed(2))));
+}
+
+function withVideoFragment(file: FileDetails, previewUrl: string | null) {
+  if (!previewUrl) {
+    return null;
+  }
+
+  const startSeconds = file.segmentStartMs != null ? Math.max(0, file.segmentStartMs / 1000) : null;
+  const endSeconds = file.segmentEndMs != null ? Math.max(0, file.segmentEndMs / 1000) : null;
+  if (startSeconds == null) {
+    return previewUrl;
+  }
+
+  const fragment = endSeconds != null && endSeconds > startSeconds
+    ? `#t=${startSeconds},${endSeconds}`
+    : `#t=${startSeconds}`;
+  return `${previewUrl}${fragment}`;
 }
