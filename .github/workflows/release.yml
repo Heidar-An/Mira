@@ -42,8 +42,7 @@ jobs:
             curl \
             wget \
             file \
-            libxdo-dev \
-            libayatana-appindicator3-dev
+            libxdo-dev
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -70,12 +69,13 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Mira ${{ github.ref_name }}'
           releaseBody: |
-            Mira 0.1.1 adds support for videos, includes a round of bug fixes, and now ships downloadable builds for Windows and Linux alongside macOS.
+            Mira 0.1.2 adds support for videos, includes a round of bug fixes, and now ships downloadable builds for Windows and Linux alongside macOS.
 
             Highlights:
             - Video support across search and preview flows
             - Bug fixes and stability improvements
             - Release builds for Windows and Linux
+            - Linux packaging fix for Ubuntu release builds
 
             **macOS users:** Mira is not yet notarized by Apple. After dragging Mira to `/Applications`, run this once in Terminal to remove the quarantine flag:
 
