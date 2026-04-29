@@ -70,7 +70,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Mira ${{ github.ref_name }}'
           releaseBody: |
-            See the assets below to download and install this version.
+            Mira 0.1.1 adds support for videos, includes a round of bug fixes, and now ships downloadable builds for Windows and Linux alongside macOS.
+
+            Highlights:
+            - Video support across search and preview flows
+            - Bug fixes and stability improvements
+            - Release builds for Windows and Linux
 
             **macOS users:** Mira is not yet notarized by Apple. After dragging Mira to `/Applications`, run this once in Terminal to remove the quarantine flag:
 
